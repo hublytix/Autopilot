@@ -147,10 +147,11 @@ These six entries change something the brief states outright, or interpret one o
 - **Signals:** HubSpot sends no push uninstall event [HS-UNINSTALL-NOTIFY, HS-WH-UNINSTALL-EVENT]. Two signals mark a connection `revoked`:
   - (1) a refresh classified `revoked`;
   - (2) a daily `POST /oauth/2026-09/token/introspect` probe on the refresh token, run for every active connection whatever its pause or billing state. `{"active": false}` counts as revoked [HS-TOKEN-METADATA].
-- **Revoked means:**
+- **Revoked means**, all in one transaction with the revoke compare-and-set (PLAN §9.1 step 3):
   - tokens are wiped;
   - `purge_after = now + 30 d` (brief §5.1);
-  - one reconnect email is sent, by whichever caller wins the state change.
+  - jobs are cancelled and action tokens revoked;
+  - the reconnect email is reserved. It is sent after commit, and resumed by the sweeper if lost (D-45).
 - **Owner Disconnect is best effort and always completes locally:**
   - try `DELETE /appinstalls/2026-09/external-install`, then `POST /oauth/2026-09/token/revoke` [HS-UNINSTALL-API];
   - then always wipe tokens, set `purge_after`, cancel jobs and revoke action tokens.
@@ -168,7 +169,7 @@ These six entries change something the brief states outright, or interpret one o
 - **Brief §5.1's "exponential backoff (max 5 attempts), then a Sentry alert":** jobs are published with `Upstash-Retries: 4` and `Upstash-Retry-Delay: pow(2, retried) * 10000`. That is 5 deliveries, waiting 10, 20, 40 and 80 s between them. The failure callback raises the Sentry alert, and the connection stays active.
 - **Long waits:** a 477, or any `Retry-After` over 60 s, re-schedules the job (`notBefore = now + Retry-After`). A daily-limit 429 defers to the next local midnight.
 - **API 401:** refresh once. If that refresh is classified `revoked`, mark the connection revoked; otherwise treat it as transient.
-- **Inline callers** (the poll cron, the lead-page refresh) have no QStash backoff. Each transient refresh failure increments `transient_failures`, and the poll cron skips the portal until `next_refresh_attempt_at = now + 2^n × 5 min`. The fifth consecutive failure raises one Sentry alert; success resets the count. The connection stays active.
+- **Inline callers** (the poll cron, the lead-page refresh) have no QStash backoff. Only they increment `transient_failures` and set `next_refresh_attempt_at = now + min(2^(n−1) × 5 min, 30 min)`; jobs rely on QStash's backoff and the failure callback's alert. The poll cron skips a portal only while its token needs a refresh and `now < next_refresh_attempt_at`. The fifth consecutive inline failure raises one Sentry alert. Any successful refresh or API call, from any caller, resets both fields. The connection stays active.
 
 ### D-12 · Account timezone, UI domain, hub domain (Type A)
 - **Source:** `GET /account-info/2026-09/details` (scope `oauth`), read at install and in each account's daily job. It provides `timeZone`, `utcOffsetMilliseconds`, `uiDomain` and `dataHostingLocation` [HS-ACCOUNT-DETAILS].
@@ -200,10 +201,10 @@ These six entries change something the brief states outright, or interpret one o
   - We wait up to 10 min for an `EMAIL` to that address.
   - Before sending, we call `GET contacts/{testEmail}?idProperty=email`. On a 404 with no BCC saved, we ask the owner either to add their BCC address or to submit one of their own forms with the test address.
   - The check row (with `test_address_hmac`) is created as soon as the owner enters the test address, before the contact lookup.
-  - Intake **skips** any submission whose email HMAC equals the `test_address_hmac` of a check created in the last 24 h, open or closed, and counts it as processed for the cursor. This holds on an active account too, where the check can be re-run from the dashboard.
+  - Intake **skips** any submission whose email HMAC equals the `test_address_hmac` of a check on that account with `check.created_at − 1 h ≤ submittedAt < check.created_at + 24 h`, and counts it as processed for the cursor. The window is tested against `submittedAt`, not the current time, so the skip never lapses for that submission. This holds on an active account too, where the check can be re-run from the dashboard.
 - **Live test, reply leg:** the owner replies from the test address, and we wait up to 10 min for an `INCOMING_EMAIL` from it.
 - **Runs in the background:** an `inbox_check` job re-checks every 60 s until each leg resolves or its 10-minute window ends, whatever the account's state.
-  - The owner can "Continue — we'll keep checking" or "Skip for now" (`logging_mode=unknown`, with a dashboard reminder).
+  - The owner can "Continue — we'll keep checking" or "Skip for now" (`logging_mode=unknown`, with a dashboard reminder). Skip, or a check still without deadlines 24 h after creation, closes the check with its open legs `skipped`.
   - The legs' own check writes only `inbox_checks` and `logging_mode`. It never calls `markReplied`.
 - **Test leads** never get follow-up jobs, never supersede and never count in metrics (signals: D-08).
 - **Logging mode:** `logging_mode ∈ {unknown, log_all, sends_only, none}`. Follow-up emails carry a plain warning when replies can't be detected, and the Monday report says "Not enough data" (D-37).
@@ -291,7 +292,7 @@ These six entries change something the brief states outright, or interpret one o
 - **Applying changes:**
   - The event is only a trigger: we `GET /v1/subscriptions/{id}` and apply that state, but only if it is newer (`last_synced_at`).
   - Each account's daily job reconciles non-terminal subscriptions.
-  - Webhooks for purged accounts hit a content-free tombstone and get a 200.
+  - Webhooks for purged accounts hit a content-free tombstone. We fetch the subscription: `authenticated`/`active` → cancel (`cancel_at_cycle_end: false`) and alert the admin to refund; terminal → mark the tombstone resolved. Then 200. The daily cron reconciles unresolved tombstones the same way (D-48).
 
 ### D-20 · Razorpay hosted checkout, trial, USD, cancel (Type A, brief change)
 - **Subscription link:** `POST /v1/subscriptions` with `{plan_id, total_count: 120, quantity: 1, customer_notify: true, expire_by, notes: {autopilot_account_id}}`, then a 303 to `short_url` [RZP-CHECKOUT-HOSTED, RZP-SUB-CREATE-FIELDS].
@@ -393,7 +394,7 @@ These six entries change something the brief states outright, or interpret one o
 
 ## B. Choices where the brief is silent (and law readings)
 
-### D-27 · Owner-facing emails: Reply-To and the "don't reply" line
+### D-27 · Owner-facing emails: Reply-To and the "not monitored" line
 - **Reply-To:**
   - Owner emails about leads (new lead, needs touch, follow-up, reply detected, inbox test) set Reply-To to the **owner's own address**.
   - They never use the lead's address (that would hand the lead our tokens) or our support inbox.
@@ -487,16 +488,16 @@ These six entries change something the brief states outright, or interpret one o
 ### D-35 · Owner binding, reconnect, reinstall
 - **Email step:** `/onboarding/email` requires the signed `pending_install` cookie (24 h).
   - It is pre-filled with the installer's email from token introspection.
-  - It stores `accounts.pending_owner_email` and `pending_owner_expires_at` (+24 h), creates the auth user (kept in `pending_owner_auth_user_id`; the previous one is deleted if the email changes and owns no account), and sends the magic link with an `onboarding` login intent.
+  - It stores `accounts.pending_owner_email` and `pending_owner_expires_at` (+24 h), creates or reuses the auth user (kept in `pending_owner_auth_user_id`; when the email changes, the previous one is deleted only if no `users` row has that `auth_user_id` and no other account lists it as `pending_owner_auth_user_id`), and sends the magic link with an `onboarding` login intent.
   - If the email already owns another Autopilot account, it says so (one owner per account).
 - **Bind:** in the `/auth/confirm` POST, in **any** browser, after `verifyOtp`, as **one statement**:
   - `WITH b AS (UPDATE accounts SET owner_user_id=$u, pending_owner_email=NULL, pending_owner_expires_at=NULL, pending_owner_auth_user_id=NULL WHERE id=$intent.account_id AND owner_user_id IS NULL AND lower(pending_owner_email)=$verifiedEmail AND pending_owner_expires_at > $now RETURNING id) INSERT INTO users (auth_user_id, account_id, email) SELECT $u, b.id, $verifiedEmail FROM b`;
-  - on a unique violation nothing is bound, and the page says "This email already owns an Autopilot account".
+  - on a unique violation nothing is bound, the losing account's `pending_owner_*` fields are cleared, and the page says "This email already owns an Autopilot account".
   - No cookie or nonce is needed. A login-CSRF can't bind a stranger, because the verified email must equal the pending email.
   - `users` has a unique `lower(email)`.
 - **OAuth callback branches:**
   - (a) **New portal:** create the account with `last_install_at = now`. The trial comes from `portal_history` if present, else now + 14 d. Issue `pending_install` → `/onboarding/email`.
-  - (b) **Existing, never bound** (`owner_user_id IS NULL`, not purged): store the fresh tokens, set the connection active, set `last_install_at = now` (restarting the orphan clock), reset the `pending_owner_*` fields, keep the trial, issue a new `pending_install` → `/onboarding/email`.
+  - (b) **Existing, never bound** (`owner_user_id IS NULL`, not purged): store the fresh tokens, set the connection active, set `last_install_at = now` (restarting the orphan clock), reset `pending_owner_email` and `pending_owner_expires_at` (keeping `pending_owner_auth_user_id` for the guarded delete), keep the trial, issue a new `pending_install` → `/onboarding/email`.
   - (c) **Existing, owned, with the owner's session:** reactivate. Connection active; clear `purge_after`, `disconnected_at`, `status_reason` and `reconnect_email_sent_at`; then `applyProcessingState` (floors move forward).
   - (d) **Existing, owned, without the owner's session:** change nothing.
     - If the introspected installer email equals the owner's email, show "Sign in to finish reconnecting" and email a magic link (next `/dashboard?reconnect=1`).
@@ -600,7 +601,7 @@ These six entries change something the brief states outright, or interpret one o
 - **Committed before send:** tokens are minted when the notification is reserved, and their hashes are **committed before** `Mailer.send`.
   - A retry after a crash re-mints tokens. If Resend then answers 409 `invalid_idempotent_request` for our reserved key, the email already went out with the first, committed tokens, so we mark it sent.
 - **Reuse:** send and edit tokens are reusable until expiry and counted. A dismiss token is single-use.
-- **Takeover and resume:** a reservation still `sending` can be taken over by the paired kind (new_lead↔needs_touch, follow_up↔needs_touch share a key) through a compare-and-set on its kind; only `sent` blocks. The sweeper resumes `sending` reservations older than 10 min, re-checking the kind's predicates (D-15). `magic_link` rows can't be re-rendered (the hashed token isn't stored) and are marked `failed`; the owner asks for a new link.
+- **Takeover and resume:** a reservation still `sending` can be taken over by the paired kind (new_lead↔needs_touch, follow_up↔needs_touch share a key) through a compare-and-set on its kind; only `sent` blocks. The takeover re-checks the new kind's predicates (PLAN §8.4). The sweeper resumes `sending` reservations older than 10 min, at most 5 send attempts and within 23 h of the first reservation (inside Resend's 24 h idempotency window); older or exhausted rows become `failed` with an admin alert. A non-transient, non-409 send error marks the row `failed` at once, with one alert. `reconnect` and `billing_inactive` re-check that the connection is still revoked, or the account still inactive, before a resumed send. `magic_link` rows can't be re-rendered (the hashed token isn't stored) and are marked `failed`; the owner asks for a new link.
 - **Revocation:** tokens are revoked on revoke, disconnect and privacy deletion. Token checks also reject accounts that are disconnected or pending purge.
 
 ### D-46 · Notification addresses and BCC changes
@@ -631,20 +632,20 @@ These six entries change something the brief states outright, or interpret one o
   - Every writer calls it: actions, the OAuth callback, the token manager, disconnect, billing, onboarding completion and the poll cron.
   - The new state is applied by compare-and-set **in one transaction with all of the transition's database side effects** (no network I/O inside, D-28). One-shot emails are reserved (`sending`) in that transaction and sent after commit; QStash cancels also run after commit. Only the caller that wins acts:
     - → active: floors move to now, and purge fields are cleared;
-    - → inactive (from any state): one billing email, keyed `billing-inactive:{acct}:{entitlement_lost_at}` (trial end, the subscription's status change, or the end of grace), so pause → trial ends → resume still sends it, once;
+    - → inactive (from any state): one billing email, keyed `billing-inactive:{acct}:{entitlement_lost_at}`. `accounts.entitlement_lost_at` is set the first time `applyProcessingState` finds the account not entitled (in any state, paused included) and cleared when it is entitled again, so pause → trial ends → resume, or `pending` → `halted`, still send it once per non-entitled period;
     - → revoked or disconnected: `purge_after = now + 30 d`; jobs cancelled; action tokens revoked.
 - **Onboarding complete** requires all of:
   - an owner-saved brief (`brief_versions.source='owner'`, `booking_link_choice ≠ unset`);
   - at least one selected form;
   - saved preferences with at least one notify address.
   - The inbox check and baseline may finish in the background.
-- **Orphan installs:** an install with no bound owner, `last_install_at` more than 7 days ago and no unexpired pending owner gets the uninstall API call, the token wipe, deletion of the pending auth user, and an immediate purge. A branch-(b) reinstall restarts the clock. HubSpot emails the portal's admins about the uninstall.
+- **Orphan installs:** an install with no bound owner, `last_install_at` more than 7 days ago and no unexpired pending owner gets the uninstall API call, the token wipe, the connection set `disconnected`, and an immediate purge that deletes the pending auth user only if no `users` row has that `auth_user_id` and no other account lists it as `pending_owner_auth_user_id`. A branch-(b) reinstall restarts the clock. HubSpot emails the portal's admins about the uninstall.
 - **Purge:**
   - the guard re-checks that no connection is active;
   - it cancels a live `authenticated`/`active` subscription first (`cancel_at_cycle_end: false`);
   - `paused`, `pending` and `halted` can't be cancelled through the API: the purge still runs at 30 days (brief §5.14), and the admin is alerted to cancel the subscription in the Razorpay dashboard;
   - the Disconnect dialog explains those states;
-  - after the purge, tombstones (`billing_tombstones` keeps each subscription's id and last status) keep late webhooks harmless. A tombstoned subscription later seen `authenticated` or `active` (webhook or daily reconcile) is cancelled at once, and the admin is alerted to refund any charge.
+  - after the purge, tombstones (`billing_tombstones` keeps each non-terminal subscription's id and last status) keep late webhooks harmless. The webhook route and a daily reconcile in the daily cron (which needs no account) fetch every unresolved tombstoned subscription: `authenticated`/`active` → cancelled at once and the admin alerted to refund any charge; terminal → resolved.
 
 ### D-49 · Where content can live, and for how long (sign-off for the Law 4 reading)
 - **Retention runs hourly as well as daily,** so content never outlives 30 d + 1 h.
