@@ -1,413 +1,639 @@
 # Decisions log
 
-Every place where official documentation overrides the brief, and every choice made where the brief is silent, is recorded here (brief §0.1, §0.5). Evidence for each decision is in `docs/RESEARCH.md` under the finding IDs quoted in brackets, e.g. [HS-SCOPES].
+Every place where official documentation overrides the brief, and every choice made where the brief is silent, is recorded here (brief §0.1, §0.5). Evidence for each decision is in `docs/RESEARCH.md` under the finding IDs in brackets, e.g. [HS-SCOPES]. The full evidence for each finding is in `docs/research/NN-*.md`.
 
-- **Type A** = the docs contradict or extend the brief, so the docs win (§0.1).
-- **Type B** = the brief is silent, so this is the simplest option that satisfies it (§0.5).
+- **Type A**: the official docs contradict or extend the brief, so the docs win (§0.1).
+- **Type B**: the brief is silent, so we chose the simplest option that satisfies it (§0.5).
 
-Status of every entry: **proposed**, pending the owner's `approve` of `docs/PLAN.md`.
+Status: every entry is **proposed**, pending the owner's `approve` of `docs/PLAN.md`. Revision 2 includes the fixes from the five-lens plan review.
+
+---
+
+## Needs your explicit sign-off
+
+These four entries change something the brief states outright, or how one of its laws is read. They are approved together with the plan unless you say otherwise.
+
+1. **D-01** Next.js 16 instead of 14. 14.x is out of security support.
+2. **D-03** The extra HubSpot scope `sales-email-read` (read-only). Also, HubSpot's `forms` scope permits edits as well as reads; we enforce "read-only" in code instead.
+3. **D-31** Law 4: we read "the lead's form message" as all the lead's submitted fields (message, name, company, email). They are needed to build the compose links. They are purged at 30 days together with the message.
+4. **D-13** Brief §5.5 says "302 to the compose URL". For phones and the "Other" mail client, we instead show a page that opens the mail app automatically, because a 302 to `mailto:` leaves a blank tab. It is still one tap, and the button stays as a fallback.
 
 ---
 
 ## A. Corrections from official documentation (docs win)
 
-### D-01 · Next.js 16, not Next.js 14 (Type A)
-- **Decision:** Pin `next@16.3.8` (current stable) with `react@19.x`. Use `src/proxy.ts` (the Next 16 name for middleware) and keep `src/instrumentation.ts`.
+### D-01 · Next.js 16, not Next.js 14 (Type A — sign-off)
+- **Decision:** pin `next@16.3.8` with `react@19.x`.
+  - Middleware is now `src/proxy.ts` (Node runtime).
+  - `src/instrumentation.ts` stays in `src/`, beside `src/app` [NX14-INSTR-LOCATION].
 - **Why:**
-  - 14.2.35 is the final 14.x release and receives no further security fixes [NX-SUPPORT-STATUS].
-  - The npm advisory database lists 23 open GitHub advisories against 14.2.35, including 2 critical (RCE in the image optimiser; RCE on Windows hosts) and 8 high. Several of them affect every App Router app, and one specifically affects the nonce-based CSP pattern that §7 needs [NX14-ADVISORIES].
-  - 15.x is not a durable fallback: per community tracking it reaches end of life on 2026-10-21 [NX-RECOMMENDATION].
-- **Brief rules that still hold:**
-  - `instrumentation.ts` must live in `src/` when the app uses `src/app` [NX14-INSTR-LOCATION].
-  - TypeScript strict, Tailwind and the App Router are unchanged.
+  - 14.2.35 is the last 14.x release and gets no more security fixes [NX-SUPPORT-STATUS].
+  - The npm advisory database lists 23 open GitHub advisories for it. Two are critical: remote code execution in the image optimiser, and remote code execution on Windows hosts [NX14-ADVISORIES].
+  - 15.x reaches end of life on 2026-10-21 according to community tracking [NX-RECOMMENDATION].
 - **Consequences:**
-  - No `experimental.instrumentationHook` flag.
-  - `export const onRequestError = Sentry.captureRequestError` in `src/instrumentation.ts`.
-  - `headers()` and `cookies()` are async.
-  - `next lint` is removed in Next 16, so we use the ESLint 9 flat-config CLI.
-  - Turbopack is the default for dev and build.
-- **If the owner rejects this:** fall back to 14.2.35 with the mitigations in [NX14-ADVISORIES]:
+  - No `experimental.instrumentationHook` setting.
+  - `onRequestError = Sentry.captureRequestError` is exported.
+  - `params`, `searchParams`, `headers()` and `cookies()` are async.
+  - `next lint` is gone, so we use the ESLint 9 flat config.
+  - Turbopack is the default; `next typegen` runs before `tsc`.
+  - `global-error.tsx` is required.
+- **If rejected:** use 14.2.35 with the [NX14-ADVISORIES] mitigations:
   - `images.unoptimized: true`;
   - no Server Actions;
   - strip inbound CSP request headers on every route;
   - `experimental.instrumentationHook: true` in `next.config.mjs`.
 
-### D-02 · The HubSpot app is a developer-platform project, not a legacy public app (Type A)
-- **Decision:**
-  - The app config lives in the repo under `hubspot-app/`: `hsproject.json` with `platformVersion: "2026.09"`, `src/app/app-hsmeta.json` with `distribution: "marketplace"` and `auth.type: "oauth"`, and `src/app/webhooks/webhooks-hsmeta.json`.
-  - It is created and uploaded with the HubSpot CLI (`hs project upload`).
-- **Why:** HubSpot permanently disabled creating legacy public apps in mid-2026 [HS-APP-PLATFORM]. The CLI/project flow is the only way to create a new OAuth app [HS-APP-HSMETA-CONFIG, HS-CLI-WORKFLOW].
-- **Impact:** WIRE_UP step 1 becomes a CLI flow. A unit test diff-checks the requested scopes against `app-hsmeta.json`.
+### D-02 · The HubSpot app is a developer-platform project (Type A)
+- **Decision:** `hubspot-app/` holds three files, uploaded with the HubSpot CLI (`hs project upload`):
+  - `hsproject.json` (`platformVersion: "2026.09"`);
+  - `src/app/app-hsmeta.json` (`distribution: "marketplace"`, `auth.type: "oauth"`);
+  - `src/app/webhooks/webhooks-hsmeta.json`.
+- **Why:** HubSpot permanently disabled creating legacy public apps in mid-2026 [HS-APP-PLATFORM, HS-APP-HSMETA-CONFIG, HS-CLI-WORKFLOW].
+- **Tests:** one checks that `REQUIRED_SCOPES` matches `requiredScopes`; another checks that `targetUrl` matches the expected webhook URL.
 
-### D-03 · Add the read-only scope `sales-email-read` (Type A)
+### D-03 · Scopes, and enforcing read-only in code (Type A — sign-off)
 - **Decision:** `requiredScopes` = `oauth crm.objects.contacts.read forms sales-email-read`.
-- **Why:**
-  - The brief's minimum set (`oauth`, `crm.objects.contacts.read`, `forms`) is enough for intake.
-  - It is not enough for anything that reads logged one-to-one emails: §5.6 reply detection, §5.7 inbox check, §5.8 baseline and §5.9 confirmed sends.
-  - The current Emails spec requires `crm.objects.contacts.read` AND `sales-email-read` [HS-SCOPES, HS-EMAIL-SCOPES, HS-SCOPE-EMAIL-READ-RISK].
-- **Law 2 still holds:** every scope is read-only.
-- **Law 4 (data minimisation) is enforced in code:**
-  - Every email request uses a fixed metadata allow-list (`hs_timestamp`, `hs_email_direction`, `hs_email_status`, `hs_email_from_email`, `hs_email_to_email`).
-  - A unit test fails if a content property (subject, text, html, headers) ever appears in a request [HS-EMAIL-DATA-MINIMISATION].
+  - The brief's three scopes cover intake.
+  - Reading logged one-to-one emails also needs `sales-email-read`. That powers confirmed sends, reply detection, the inbox check, the baseline and the Monday report [HS-SCOPES, HS-EMAIL-SCOPES].
+- **`forms` also permits writes.** HubSpot has no read-only forms scope; every Forms API operation uses `forms` [HS-SCOPES]. So Law 2 holds by behaviour:
+  - `HubSpotHttp` accepts only an allow-list of method and path patterns, and anything else throws before any network call.
+    - GET for forms, submissions, contacts, associations and account-info.
+    - POST only for `…/search`, `…/batch/read`, and the `/oauth/{v}/token` endpoints (`/token`, `/token/introspect`, `/token/revoke`).
+    - DELETE only for `/appinstalls/{v}/external-install`.
+  - A unit test enumerates the list.
+  - Customer-facing copy: "Autopilot only reads from HubSpot. HubSpot's 'forms' permission would also allow edits; Autopilot never makes any."
+- **Data minimisation (law 4):** every email request uses a fixed metadata allow-list: `hs_timestamp`, `hs_email_direction`, `hs_email_status`, `hs_email_from_email`, `hs_email_to_email` [HS-EMAIL-DATA-MINIMISATION].
   - Addresses are compared in memory and never stored.
-  - The privacy page and the install screen copy say plainly that HubSpot will show "read email" access, and that Autopilot reads only dates and directions.
-- **Fallback:** if `sales-email-read` is not in the granted scopes (the token response `scopes`, or a 403 `MISSING_SCOPES`), the email-dependent features show "Not enough data". We never estimate.
+  - A test fails if any content property is ever requested.
+- **If the email scope is unavailable (decided at WIRE_UP):** HubSpot blocks install on any scope mismatch, so a runtime fallback can't be reached [HS-SCOPE-EMAIL-READ-RISK].
+  - (a) If `hs project upload` or a test install rejects `sales-email-read`, try `crm.objects.emails.read`.
+  - (b) If neither works, remove it from the single `REQUIRED_SCOPES` constant and from `app-hsmeta.json`. Every email-based feature then shows "Not enough data". A FakeHubSpot variant returning 403 `MISSING_SCOPES` covers path (b).
 
-### D-04 · Use HubSpot's date-versioned APIs (2026-09) (Type A)
-- **Decision:**
-  - Every HubSpot path is built from `HUBSPOT_API_VERSION` (default `2026-09`, e.g. `/crm/objects/2026-09/contacts/search`, `/oauth/2026-09/token`, `/account-info/2026-09/details`, `/appinstalls/2026-09/external-install`).
-  - There are no `/v4/` calls.
+### D-04 · HubSpot's date-versioned APIs (2026-09) (Type A)
+- **Decision:** every HubSpot path comes from `HUBSPOT_API_VERSION` (default `2026-09`). No `/v4/` calls.
 - **Exceptions (no dated version exists):**
   - forms list `GET /marketing/v3/forms`;
-  - form submissions `GET /form-integrations/v1/submissions/forms/{formGuid}` [HS-API-VERSIONING, HS-API-VERSIONING-PATHS].
-- **Why:** HubSpot tells new integrations to use the latest date version. OAuth v1 stops working on 2027-02-16. v4 APIs become unsupported on 2027-03-30, and v1–v3 in September 2027.
-- **Fallback:** `HUBSPOT_API_VERSION=2026-03` changes it in one place if the WIRE_UP smoke test finds a problem.
+  - submissions `GET /form-integrations/v1/submissions/forms/{formGuid}` [HS-API-VERSIONING, HS-API-VERSIONING-PATHS].
+- **Fallback:** `2026-03`, if the smoke test fails.
+- **Associations:** `GET /crm/objects/2026-09/contacts/{id}/associations/emails` and `POST /crm/associations/2026-09/contacts/emails/batch/read`.
 
-### D-05 · Webhook idempotency key is composite, not `eventId` alone (Type A)
-- **Decision:** `webhook_events` is unique on `(provider, portal_id, subscription_type, object_id, event_id, occurred_at)` for HubSpot, and on `(provider, event_id)` for Razorpay.
-  - Lead-level idempotency is separate: `UNIQUE(account_id, hubspot_contact_id, submitted_at)` and `UNIQUE(account_id, form_id, submission_key)`.
-- **Why:** HubSpot documents `eventId` as "not guaranteed to be unique", and says notifications may be duplicated and arrive out of order [HS-WH-IDEMPOTENCY].
-- **Brief §6** said "`eventId` unique". The replay test still proves that one event yields one lead.
+### D-05 · Webhook and event idempotency keys (Type A)
+- **HubSpot:** `dedupe_key = portalId:subscriptionType:objectId:eventId:occurredAt`, unique per provider. HubSpot documents `eventId` as "not guaranteed to be unique" [HS-WH-IDEMPOTENCY].
+- **Razorpay:** `dedupe_key` = the `x-razorpay-event-id` header, or `sha256:<raw body hash>` when the header is missing. There is also a partial unique index on `body_sha256` (D-19).
+- **Lead-level idempotency is separate:**
+  - `UNIQUE(account_id, hubspot_contact_id, submitted_at)` (the brief's dedupe);
+  - `UNIQUE(account_id, form_id, submission_key)`.
 
-### D-06 · Webhook subscriptions (Type A)
-- **Decision:**
-  - `crmObjects`: `{"subscriptionType":"object.creation","objectType":"contact"}` (the platform's new format).
-  - `hubEvents`: `contact.privacyDeletion`.
-  - The handler also accepts the classic `contact.creation` shape.
-- **Why:** The new developer platform's format is `object.creation` with `objectTypeId "0-1"` [HS-WH-SUBTYPE-CONTACT-CREATION, HS-WH-HSMETA-CONFIG]. Subscribing to privacy deletion lets us purge a deleted contact's content immediately [HS-WH-GDPR-PRIVACY-DELETION].
-- **Not subscribed:** deletion, merge and opt-out. They are re-checked from the contact record whenever a job runs.
+### D-06 · Webhook subscriptions and handling (Type A)
+- **Subscriptions:**
+  - `crmObjects: object.creation` for `objectType contact`;
+  - `hubEvents: contact.privacyDeletion` [HS-WH-SUBTYPE-CONTACT-CREATION, HS-WH-GDPR-PRIVACY-DELETION].
+  - The handler also accepts the classic `contact.creation`.
+- **Rejected events:** any event whose `appId` isn't `HUBSPOT_APP_ID` is dropped with a 200.
+- **Privacy deletion:**
+  - It is processed for **every known portal**, whatever its status (paused, inactive, revoked, awaiting purge).
+  - It is recorded and handed to a durable `privacy_delete` job, which:
+    - deletes `lead_messages`;
+    - nulls draft `subject`, `body` and `flags`;
+    - replaces `submission_key` with a random value;
+    - revokes the leads' action tokens;
+    - cancels jobs;
+    - sets `stop_reason='privacy_deletion'`.
+- **Not subscribed:** deletion, merge and opt-out. They are re-read from the contact before every send.
 
-### D-07 · Lead intake: the Forms submissions API is the source of truth (Type A)
-- **Decision:**
-  - Every 5 minutes, for each selected form, read `GET /form-integrations/v1/submissions/forms/{formGuid}?limit=50` with a per-form cursor (minus a 15-minute overlap). Page until a page has nothing newer than the cursor, or the page cap is hit.
-  - Resolve each new submission to its contact with `GET /crm/objects/2026-09/contacts/{email}?idProperty=email`.
-  - The `object.creation` webhook does not try to identify the form. It only triggers an immediate, debounced poll of that portal's selected forms.
+### D-07 · Lead intake through the Forms submissions API (Type A)
+- **Source of truth:** for each selected form, `GET /form-integrations/v1/submissions/forms/{formGuid}?limit=50`.
+  - A per-form cursor with a 15-minute overlap is used for paging.
+  - Only submissions with `submittedAt > intake_floor_at` are processed. The floor is set when the form is selected, when onboarding completes, and whenever processing resumes (D-42, D-48), so no historical lead is ever ingested.
+- **Contact lookup:** `GET contacts/{email}?idProperty=email` resolves the contact. Missing name, company or message fields fall back to that contact's properties (brief §5.2).
+- **Webhook role:** `object.creation` only triggers polls, one immediately and one at +90 s, because the submission may lag the contact.
 - **Why:**
-  - No webhook exists for form submissions [HS-WH-FORM-SUBMISSION-EVENT].
-  - Contact conversion properties give only `"Page title: Form name"` text and the latest conversion; they carry no form GUID [HS-INTAKE-CONVERSION-PROPS].
-  - The submissions API returns the form GUID, `submittedAt`, `conversionId` and the submitted values (name, email, company, message) [HS-INTAKE-SUBMISSIONS-API, HS-INTAKE-SUBMISSION-CONTACT-MATCH].
-  - CRM search on `recent_conversion_date` is supported [HS-INTAKE-SEARCH-RECENT-CONVERSION], but it shows only the latest conversion per contact and suffers index lag, so it is not used.
-- **Brief's rationale corrected:** HubSpot does not document that calculated properties can't be subscribed. It only excludes `num_unique_conversion_events` and `hs_lastmodifieddate` [HS-WH-CALC-PROPS, HS-INTAKE-WEBHOOK-CALC-PROPS]. The conclusion that a poller is needed still stands.
-- **Risk:** the submissions endpoint is legacy v1. It sits behind a `LeadSource` boundary so it can be replaced.
+  - There is no form-submission webhook [HS-WH-FORM-SUBMISSION-EVENT].
+  - Contact conversion properties carry no form GUID and only show the latest conversion [HS-INTAKE-CONVERSION-PROPS].
+  - Search on `recent_conversion_date` works [HS-INTAKE-SEARCH-RECENT-CONVERSION] but lags and collapses repeat submissions, so it is kept only as a documented fallback.
+- **Brief's rationale corrected:** HubSpot does not document that calculated properties can't be subscribed [HS-WH-CALC-PROPS, HS-INTAKE-WEBHOOK-CALC-PROPS].
+- **Form types:**
+  - `hubspot` and `flow` (pop-ups) are listed, using repeated `formTypes` params with `archived=false&limit=100` and paging.
+  - `captured` (non-HubSpot) forms are excluded in v1, because submissions-API behaviour for them is undocumented [HS-INTAKE-SUBMISSIONS-API]. They return to the list once a WIRE_UP check passes.
 
-### D-08 · Reply detection and "confirmed send" signals (Type A)
-- **Confirmed send:** an email engagement associated with the lead's contact, with `hs_email_direction = EMAIL`, `hs_timestamp` after the notification time minus 60 s of skew, and status absent or `SENT` [HS-CONFIRMED-SEND].
-  - Its definition, shown in the UI copy: "an outbound email to this lead was logged in HubSpot after we sent you the draft". We cannot prove it was our draft without reading content, which law 4 forbids.
-- **Confirmed reply:** an email engagement associated with the contact, with direction `INCOMING_EMAIL` or `FORWARDED_EMAIL`, `hs_timestamp` after the first notification, and `hs_email_from_email` equal to the lead's email or one of `hs_additional_emails`.
-  - Positive-only fallback: `hs_sales_email_last_replied` > first notification [HS-REPLY-SIGNAL, HS-CONTACT-ACTIVITY-PROPS].
-  - Otherwise the status is "no confirmed reply", never "no reply".
-- **Never used as reply evidence:** `notes_last_contacted`, `hs_last_sales_activity_timestamp`, `num_contacted_notes`, `hs_email_last_reply_date`. They would overstate replies (law 3).
-- **Read pattern:** read the contact with `associations=emails`, then batch-read the associated emails with metadata only. This avoids search index lag [HS-EMAIL-BY-CONTACT].
+### D-08 · Confirmed sends and replies (Type A)
+- **Confirmed send:** an email engagement associated with the contact where all of these hold:
+  - `hs_email_direction = EMAIL`;
+  - `hs_timestamp ≥ notified_at − 60 s`;
+  - status is absent or `SENT`;
+  - the lead's email (or one of `hs_additional_emails`) is among the recipients in `hs_email_to_email` [HS-CONFIRMED-SEND].
+- **Confirmed reply:** an engagement associated with the contact where all of these hold [HS-REPLY-SIGNAL]:
+  - direction `INCOMING_EMAIL` or `FORWARDED_EMAIL`;
+  - `hs_timestamp > first_notified_at` (and > `replies_ignored_before`);
+  - `hs_email_from_email` is the lead's address.
+- **Positive-only fallback:** `hs_sales_email_last_replied` [HS-CONTACT-ACTIVITY-PROPS].
+- **Never used as reply evidence:** `notes_last_contacted`, `hs_last_sales_activity_timestamp`, `num_contacted_notes`, `hs_email_last_reply_date`.
+- **Stored times are HubSpot's event times:**
+  - `send_confirmed_at` and `replied_at` = the earliest qualifying `hs_timestamp`, written monotonically (`LEAST`);
+  - `signals_checked_at` records when we looked.
+- **Reads:** the contact `GET … &associations=emails`, following `paging.next` through the dated associations endpoint, then `emails/batch/read` in chunks of 100 [HS-EMAIL-BY-CONTACT].
+- **One `markReplied()`:** the first caller to set `replied_at` cancels the remaining follow-ups and sends "{Name} replied — follow-ups stopped". Any later caller gets no row back and does nothing.
 
-### D-09 · Follow-up hard stops read from the contact record (Type A)
+### D-09 · Follow-up hard stops read from the contact (Type A)
 - **Stop when any of these holds:**
   - `hs_email_optout == "true"`;
   - `hs_email_hard_bounce_reason_enum` is non-empty;
   - `hs_email_bad_address == "true"`;
-  - the contact `GET` returns 404 (deleted/archived).
-- **Merges:** a 200 with a different `id` is a merge, so we re-map the contact ID and continue [HS-OPTOUT, HS-BOUNCE-BADADDRESS, HS-CONTACT-DELETED-MERGED].
-- **Never requested:**
-  - `communication_preferences.read_write`, which is write-capable;
-  - the batch status scopes, which need Marketing Hub Enterprise and would block Free/Starter installs.
+  - the contact returns 404.
+- **Merge:** a 200 with a different `id` means the contact was merged, so we re-map it and continue [HS-OPTOUT, HS-BOUNCE-BADADDRESS, HS-CONTACT-DELETED-MERGED].
+- **Never requested:** `communication_preferences.read_write`, and the Enterprise-only batch scopes.
 
-### D-10 · How uninstall is detected (Type A)
-- **Decision:**
-  - The authoritative signal is a token refresh classified `revoked`. It sets the connection to `revoked`, stops processing and starts the 30-day purge clock.
-  - Owner-initiated disconnect calls `DELETE /appinstalls/2026-09/external-install` and then `POST /oauth/2026-09/token/revoke`, then wipes tokens locally [HS-UNINSTALL-API].
-  - Polling the Webhooks Journal `APP_LIFECYCLE_EVENT` stream is designed for but ships disabled (`HUBSPOT_JOURNAL_ENABLED=false`) until it has been tested on a real developer account.
-- **Why:** HubSpot sends no push webhook on uninstall. Uninstall is visible only through the pull-based Webhooks Journal, or through the next failed refresh [HS-UNINSTALL-NOTIFY, HS-WH-UNINSTALL-EVENT, HS-UNINSTALL-TOKENS].
-- **Webhook events** for portals that are not active are acknowledged with 200 and dropped.
+### D-10 · Uninstall detection (Type A)
+- **Signals:** HubSpot sends no push uninstall event [HS-UNINSTALL-NOTIFY, HS-WH-UNINSTALL-EVENT]. Two signals mark a connection `revoked`:
+  - (1) a refresh classified `revoked`;
+  - (2) a **daily probe**, `POST /oauth/2026-09/token/introspect` on the refresh token, run for **every** active connection whatever its pause or billing state. `{"active": false}` counts as revoked [HS-TOKEN-METADATA].
+- **Revoked means:**
+  - tokens are wiped;
+  - `purge_after = now + 30 d` (brief §5.1);
+  - one reconnect email is sent, by whichever caller wins the state change.
+- **Owner Disconnect is best effort and always completes locally:**
+  - try `DELETE /appinstalls/2026-09/external-install`, then `POST /oauth/2026-09/token/revoke` [HS-UNINSTALL-API];
+  - then always wipe tokens, set `purge_after`, cancel jobs and revoke action tokens.
+- **Webhooks Journal (`APP_LIFECYCLE_EVENT`) polling:** designed but disabled (`HUBSPOT_JOURNAL_ENABLED=false`).
 
-### D-11 · Classifying refresh failures (Type A)
-`classifyRefreshFailure()` returns one of three classes [HS-OAUTH-REFRESH-ERRORS, HS-HTTP-ERROR-CODES, HS-429-SHAPE]:
+### D-11 · Classifying HubSpot errors (Type A)
+`classifyRefreshFailure()` [HS-OAUTH-REFRESH-ERRORS, HS-HTTP-ERROR-CODES, HS-429-SHAPE]:
 
-| Class | When | Action |
+| Class | Matches | Action |
 |---|---|---|
-| `revoked` | HTTP 4xx other than 429, and `error = invalid_grant`, or `status ∈ {BAD_REFRESH_TOKEN, BAD_HUB}`, or `error = access_denied` | Terminal: stop jobs, show the banner, send one email. |
-| `config` | `invalid_client`, `unauthorized_client`, `invalid_request`, `unsupported_grant_type`, or `BAD_CLIENT_ID`, `BAD_CLIENT_SECRET`, `BAD_REDIRECT_URI`, `BAD_GRANT_TYPE` | Sentry alert once; portals stay active. A rotated client secret must never mass-revoke every portal. |
-| `transient` | 423, 429, 477, 5xx, timeouts | Exponential backoff, at most 5 attempts, then a Sentry alert. A daily 429 defers the job to the next local midnight instead of spending attempts. |
+| `revoked` | 4xx other than 429, with `error=invalid_grant`, or `status ∈ {BAD_REFRESH_TOKEN, BAD_HUB}`, or `error=access_denied` | terminal |
+| `config` | `invalid_client`, `unauthorized_client`, `invalid_request`, `unsupported_grant_type`, `BAD_CLIENT_ID`, `BAD_CLIENT_SECRET`, `BAD_REDIRECT_URI`, `BAD_GRANT_TYPE` | Sentry once; portals stay active |
+| `transient` | 423, 429, 477, 5xx, timeouts | the job returns 5xx so QStash handles backoff |
 
-### D-12 · Account timezone source (Type A, confirms the brief)
-- **Source:** `GET /account-info/2026-09/details` (scope `oauth`) returns `timeZone`, `utcOffsetMilliseconds`, `uiDomain` and `dataHostingLocation` [HS-ACCOUNT-DETAILS].
-- **Refresh:** at install and daily.
-- **Fallback:** if the zone isn't a valid IANA name, use the fixed offset. If the call fails, onboarding asks the owner for their timezone.
-- **Record links** use `https://{uiDomain}/contacts/{portalId}/record/0-1/{contactId}` [HS-RECORD-URL].
+- **Long waits:** a 477, or any `Retry-After` over 60 s, re-schedules the job with `notBefore = now + Retry-After`. A daily-limit 429 defers to the next local midnight.
+- **API 401:** refresh once. If that refresh is classified `revoked`, mark the connection revoked; otherwise treat it as transient.
+- **Alerting:** after 5 transient failures in a row, a Sentry alert is raised; the connection stays active.
 
-### D-13 · Compose links (Type A, where vendor documentation is missing)
-- **Decision:** `mail_client ∈ {gmail, outlook_work, outlook_personal, other}`.
+### D-12 · Account timezone, UI domain, hub domain (Type A)
+- **Source:** `GET /account-info/2026-09/details` (scope `oauth`), read at install and in each account's daily job. It provides `timeZone`, `utcOffsetMilliseconds`, `uiDomain` and `dataHostingLocation` [HS-ACCOUNT-DETAILS].
+- **Fallbacks:** a non-IANA zone uses the fixed offset. If the call fails, onboarding asks the owner.
+- **Hub domain:** `hub_domain` comes from token introspection and is stored as the brief asks [HS-HUB-DOMAIN-SEMANTICS].
+- **Record links:** `https://{uiDomain}/contacts/{portalId}/record/0-1/{contactId}` [HS-RECORD-URL].
 
-| Client / case | Link | Source |
-|---|---|---|
-| Gmail | `https://mail.google.com/mail/?view=cm&fs=1&to=…&cc=…&bcc=…&su=…&body=…` (`su`, not `subject`) | [CMP-GMAIL-WEB-URL] |
-| Outlook work | `https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=<encoded RFC 6068 mailto>` | [CMP-OUTLOOK-HOSTS] |
-| Outlook personal | `https://outlook.live.com/mail/deeplink/compose?mailtouri=…` | [CMP-OUTLOOK-PARAMS-BCC] |
-| Other, or any phone user agent | a `mailto:` interstitial page with a button | [CMP-GMAIL-MOBILE, CMP-REDIRECT-IMPLEMENTATION] |
+### D-13 · Compose links (Type A where vendor docs are missing — sign-off for the interstitial)
+- **Mail clients:** `mail_client ∈ {gmail, outlook_work, outlook_personal, other}`.
+- **Gmail:** default form is `https://mail.google.com/mail/u/{0|<email>}/?to=…&cc=…&bcc=…&su=…&body=…&tf=cm`. BCC was confirmed first-hand on this form [CMP-GMAIL-WEB-URL, CMP-BUILDER-SPEC]. `COMPOSE_GMAIL_FORM=view` switches to `?view=cm&fs=1…`.
+- **Outlook:** `{base}?mailtouri=<RFC 6068 mailto>` [CMP-OUTLOOK-PARAMS-BCC, CMP-OUTLOOK-HOSTS].
+  - Work base: `https://outlook.cloud.microsoft/mail/deeplink/compose`.
+  - Personal base: `https://outlook.live.com/mail/deeplink/compose`.
+  - Configurable: `COMPOSE_OUTLOOK_MODE` (`mailtouri|params`), `COMPOSE_OUTLOOK_WORK_BASE`, `COMPOSE_OUTLOOK_PERSONAL_BASE`.
+- **Phone user agent or client "Other":** a 200 interstitial whose nonce'd script opens the `mailto:` URL on load, with a button and "Copy reply" as fallbacks. A bare 302 to `mailto:` leaves a blank tab [CMP-REDIRECT-IMPLEMENTATION, CMP-GMAIL-MOBILE]. **This deviates from brief §5.5's "302".**
+- **Desktop Gmail/Outlook:** a 302 (`NextResponse.redirect(url, 302)`; the default would be 307).
+- **Length check:** if the final URL is over `COMPOSE_URL_LIMIT=1800` characters, show the copy-reply page instead. The check runs per client [CMP-URL-LENGTH-LIMITS].
+- **"Edit first":** the form POST returns a 200 page with the compose link as a button, never a 302. A CSP `form-action` would otherwise block the Google or Microsoft sign-in redirect for signed-out owners. CSP `form-action` therefore stays `'self'`.
+- **Encoding:** `encodeURIComponent` on `toWellFormed()` strings, plus `!'()*`. Never `URLSearchParams` [CMP-ENCODING-PLUS-SPACE].
+- **Recipients** are validated as single bare addresses [CMP-RECIPIENT-SAFETY].
+- **Every three-button email** also has an "Open in default mail app" link (`/a/{t}/send?via=mailto`).
 
-- **Length check:** if the final URL is longer than `COMPOSE_URL_LIMIT=1800` characters, use the copy-reply page instead. The check runs per client on the exact encoded string, because Outlook URLs are about 30% longer [CMP-URL-LENGTH-LIMITS].
-- **Encoding:** one encoder for all clients: `encodeURIComponent` on a well-formed string, plus `!'()*` escaped. Never `URLSearchParams`, which turns spaces into `+` [CMP-ENCODING-PLUS-SPACE, CMP-BUILDER-SPEC].
-- **Safety:** recipients are validated as a single bare address [CMP-RECIPIENT-SAFETY].
-- **Caveat:** Google and Microsoft do not document these formats. Hosts and modes live in config, and WIRE_UP includes a manual check on real accounts (including BCC on Outlook).
-- **Redirect:** a 302 for the web clients. `NextResponse.redirect` defaults to 307, so 302 is passed explicitly.
+### D-14 · BCC logging and the inbox-logging check (Type A)
+- **What gets logged:** BCC logs sends, not replies [HS-BCC-LOGGING]. Replies are logged automatically only with a connected inbox using "Log all emails to/from known contacts". That rule applies to **existing** contacts only [HS-CONNECTED-INBOX, HS-INBOX-LOGGING-CHECK-DESIGN].
+- **History:** two `emails/search` counts (outbound vs inbound, last 30 days).
+- **Live test, send leg:** our test email from Autopilot (the test lead) is sent to the owner's other address.
+  - Before it, `GET contacts/{testEmail}?idProperty=email`.
+  - On a 404 with no BCC saved, ask the owner either to add their BCC address or to submit one of their own forms with the test address.
+  - While a check is open, intake marks any submission whose email equals the hashed test address as `is_test` (no draft, no follow-ups, not counted).
+- **Live test, reply leg:** the owner replies from the test address, and we wait for an `INCOMING_EMAIL` from it.
+- **Not blocking:** "Continue — we'll keep checking" and "Skip for now" (`logging_mode=unknown`, plus a dashboard reminder). Results land on the dashboard when they arrive.
+- **Logging mode:** `logging_mode ∈ {unknown, log_all, sends_only, none}`.
+  - Follow-up emails carry a plain warning when replies can't be detected.
+  - The Monday report shows "Not enough data" for replies in those modes (D-37).
+- **Fix-step copy** distinguishes "test contact missing" from "not logged". KB-derived claims are re-checked in WIRE_UP on Free and Starter portals.
 
-### D-14 · BCC logging and the inbox check (Type A)
-- **What BCC logs:** a send (`EMAIL`), not the lead's reply [HS-BCC-LOGGING].
-- **What logs replies automatically:** a connected inbox with "Log all emails to/from known contacts" [HS-CONNECTED-INBOX, HS-REPLY-SIGNAL].
-- **Decision:** the onboarding inbox check measures two legs:
-  - **send leg:** an `EMAIL` engagement to the test address;
-  - **reply leg:** the owner replies from the test address, giving an `INCOMING_EMAIL`.
-- **Logging mode:** we store `logging_mode ∈ {log_all, sends_only, none, unknown}` per account.
-- **When replies can't be detected:** follow-ups stay on (the brief's core loop), but every follow-up email to the owner carries a plain warning: "HubSpot isn't logging replies for you, so check your inbox before sending".
-- **Contacts created by the test:** BCC logging may create the test contact. Intake ignores it because it has no form submission.
-- **Caveat:** tier availability and the settings paths come from knowledge-base search summaries only, so WIRE_UP re-checks them on a Free and a Starter portal.
+### D-15 · QStash semantics, durable jobs (Type A)
+- **Every job is a `scheduled_jobs` row,** inserted in the **same transaction** as the state that needs it (an outbox). It is published after commit, and `external_id` is stored.
+- **Claiming a job:**
+  - `status='running'`, plus `attempt_id` and `lease_until = now + 6 min`.
+  - A claim succeeds when `status='scheduled'`, or when `status='running'` with an expired lease.
+  - Later updates are conditional on the same `attempt_id`.
+- **Responses:**
+  - transient error → back to `scheduled` and return 5xx;
+  - permanent error → `failed` and 489 + `Upstash-NonRetryable-Error`;
+  - live lease held by another attempt → 503 with `Retry-After`;
+  - done, cancelled, skipped or failed → 200.
+- **Sweeper** (poll cron) re-publishes, with dedupe id `{key}:r{attempts}`:
+  - unpublished rows older than 2 min;
+  - missed rows (`run_at` over 30 min past);
+  - expired leases.
+- **Scheduling:** publish with `notBefore` only [QS-DELAY-HEADERS]. "Hop" when the target is beyond `QSTASH_MAX_DELAY_SECONDS`, and check for an early hop **before** claiming [QS-DELAY-MAX-PER-PLAN].
+- **Cancel:** by message id only; 404 counts as success; never a bulk or filter cancel [QS-CANCEL].
+- **Verification:** `Receiver.verify` with `url`, `clockTolerance: 5`, `devMode: false`. Boot fails if `QSTASH_DEV` is set in live mode [QS-RECEIVER-API, QS-DEVMODE-KEY-OVERRIDE].
+- **Failure callback:** `/api/jobs/failed` marks the job failed, and for `lead_process` and `followup` sends the "needs your touch" email (D-24).
 
-### D-15 · QStash delivery semantics (Type A)
-- **Publish with an absolute time:** `notBefore` (unix seconds), computed in app code from quiet hours and timezone [QS-DELAY-HEADERS].
-- **Hop scheduling:** the Free plan's maximum delay is 7 days, and a weekend/quiet-hours shift can push the +5-day job past it. Jobs further out than `QSTASH_MAX_DELAY_SECONDS` (default 601200 s = 7 days − 1 h) are published as a "hop" that re-publishes on arrival [QS-DELAY-MAX-PER-PLAN].
-- **Dedupe:** `Upstash-Deduplication-Id` is kept (`lead:{id}:fu:{n}`, prefixed per environment), but it only covers 10 minutes. Durable idempotency lives in Postgres: unique job rows and atomic `scheduled → running` claims [QS-DEDUPLICATION, QS-AT-LEAST-ONCE].
-- **Cancel:** by message id only, with a 404 treated as success. Bulk/filter cancel is never used; an empty filter cancels every message in the account [QS-CANCEL].
-- **Verify deliveries:**
-  - `Receiver.verify({signature, body: rawText, url: <configured URL>, clockTolerance: 5})`;
-  - always construct with `devMode: false`;
-  - at boot, assert `QSTASH_DEV` is unset in live mode [QS-RECEIVER-API, QS-DEVMODE-KEY-OVERRIDE].
-- **Handler status codes:**
-  - 200 for done or no-op;
-  - 489 + `Upstash-NonRetryable-Error: true` for permanent errors (including a revoked portal);
-  - 5xx for transient errors [QS-RETRIES-SUCCESS].
-- **Failure callback:** `/api/jobs/failed` records jobs that land in the DLQ, for the admin page [QS-FAILURE-CALLBACK-DLQ].
+### D-16 · Periodic triggers (Type A)
+- **Auth:** each periodic route accepts either a Vercel Cron GET with `Authorization: Bearer ${CRON_SECRET}` (constant-time compare) or a signed QStash schedule POST [VC-CRON-SECRET-UA, QS-SCHEDULES-ALTERNATIVE].
+- **WIRE_UP default:** Vercel **Pro** with `vercel.json` crons. Hobby limits are unverified [VC-CRON-PLAN-LIMITS]; `scripts/qstash-schedules.ts` is the alternative.
+- **Leases:**
+  - the poll cron takes a global lease (TTL 6 min, longer than `maxDuration`);
+  - `pollPortal` takes a per-account lease;
+  - cursors move only forward (`GREATEST`).
 
-### D-16 · Periodic triggers work with either transport (Type A)
-- **Decision:** each periodic route accepts either:
-  - a Vercel Cron `GET` with `Authorization: Bearer ${CRON_SECRET}` (constant-time compare); or
-  - a signed QStash schedule `POST` [VC-CRON-SECRET-UA, QS-SCHEDULES-ALTERNATIVE].
-- **Default in WIRE_UP:** Vercel Cron via `vercel.json` on a **Pro** plan.
-- **Why Pro:** Hobby very likely allows only daily crons. The Vercel page could not be fetched [VC-CRON-PLAN-LIMITS], so WIRE_UP re-checks this and documents QStash schedules as the Hobby alternative.
-- **Crons run only on production, are UTC-only, and are not retried.** Handlers are therefore idempotent, take a lease, and are written as "due" checks [VC-CRON-CONFIG, VC-CRON-RETRY-OVERLAP].
+### D-17 · Monday report: due-check, window, who gets one (Type A + B)
+- **Due-check:** local time ≥ Monday 08:00 of the current ISO week, before Tuesday 00:00 local, and no `weekly_reports` row for that week [VC-CRON-MONDAY-DUE].
+  - The timezone used is stored on the row.
+  - `pending` and `failed` rows are re-enqueued until Tuesday 00:00 local, with a bounded number of attempts.
+- **Period:** `[Mon 08:00 local minus 1 week (Luxon, in the portal zone), Mon 08:00 local)`, half-open and stored as UTC instants.
+- **Two kinds of metric:**
+  - **cohort** metrics cover leads submitted in the period (not test leads);
+  - **event** metrics (replies, follow-ups drafted) are counted by HubSpot or notification time within the period.
+- **Order:** signals are refreshed first, through `applySignals`/`markReplied`. Job ordering can't change the numbers.
+- **Who gets one:** accounts with onboarding complete and `processing_state = active`. Paused, inactive, revoked and disconnected accounts get none.
 
-### D-17 · Monday report uses a "due" check, not exact equality (Type A)
-- **Rule:** a report is due when local time ≥ Monday 08:00 of the current ISO week, local time is before Tuesday 00:00, and no `weekly_reports` row exists for (account, week).
-- **Why not equality:** an hourly UTC cron is never exactly 08:00 local in half-hour or 45-minute zones, and a missed run must catch up [VC-CRON-MONDAY-DUE].
-- **Write order:** insert the row first, then send.
+### D-18 · Razorpay checkout guard, entitlement, resume (Type A)
+- **Guard:**
+  - **block** on `authenticated`, `active`, `pending`, `halted`, `paused`;
+  - **allow** when there is no subscription, or it is `created`, `expired`, `cancelled` or `completed`;
+  - **never block on `created`:** reuse its `short_url` while `expire_by > now` and (`start_at` is null or `start_at > now`) [RZP-SUB-DECLINED-CREATED-GUARD].
+- **Billing page actions:**
+  - `pending`/`halted`: "Update payment method" (the stored `short_url`);
+  - `paused`: "Resume subscription" (`POST /v1/subscriptions/{id}/resume {"resume_at":"now"}`) [RZP-SUB-CANCEL-PAUSE-RESUME-FETCH].
+- **Checkout races:**
+  - serialised with `accounts.checkout_lock_until` (30 s compare-and-set);
+  - a partial unique index allows one `created` subscription per account;
+  - if a second live subscription activates for the same account, the newer one is cancelled immediately and the admin is alerted.
+- **Entitlement:** `trialing` OR `authenticated` OR `active` OR (`pending` AND `now < grace_until`).
+  - `grace_until = payment_failed_at + 3 d`, where `payment_failed_at` is the first `pending` event's `created_at`. Both are cleared when the status returns to `active`.
+  - `halted`, `paused`, `cancelled`, `completed` and `expired` are inactive. Unknown statuses are inactive and alert the admin. `resumed` maps to `active` [RZP-SUB-STATUSES, RZP-STATUS-MAPPING].
+  - "Current subscription" means the row with the latest `created_at`.
 
-### D-18 · Razorpay checkout guard and entitlement (Type A)
-- **Checkout guard (brief: block on active and halted):**
-  - **Block** when the latest subscription is `authenticated`, `active`, `pending`, `halted` or `paused`. These are all live mandates, so a second checkout would create a second mandate.
-    - For `pending` and `halted`, show "Update payment method", linking the stored `short_url`.
-  - **Allow** when there is no subscription, or its status is `created`, `expired`, `cancelled` or `completed`.
-  - **Never block on `created`:** reuse its stored `short_url` while `expire_by` is in the future [RZP-SUB-DECLINED-CREATED-GUARD].
-- **Entitlement:** processing runs while `trialing`, or while the status is `authenticated`, `active` or `pending`.
-  - `pending` is Razorpay's own retry window (T+1..T+3), which is the brief's 3-day grace. It is capped by `grace_until` = first failure + 3 days.
-  - `halted`, `paused`, `cancelled`, `completed` and `expired` are inactive [RZP-SUB-STATUSES, RZP-SUB-PENDING-HALTED-RETRY, RZP-STATUS-MAPPING].
-  - An unknown status is treated as inactive and raises an admin alert. A stray `resumed` maps to `active`.
+### D-19 · Razorpay webhooks (Type A)
+- **Verification:** HMAC hex over the raw body with the webhook secret, compared timing-safe. An empty secret is refused. `RAZORPAY_WEBHOOK_SECRET_PREVIOUS` is supported during rotation [RZP-WH-SIGNATURE].
+- **No timestamp header**, so instead we require `created_at` to be at most 5 min in the future and no more than 16 days old [RZP-WH-REPLAY-TIMESTAMP].
+- **Dedupe:** per D-05.
+- **Applying changes:**
+  - The event is only a trigger: we `GET /v1/subscriptions/{id}` and apply that state.
+  - A change is applied only if it is newer: `… WHERE last_synced_at IS NULL OR last_synced_at < $fetched_at`.
+  - Each account's daily job reconciles non-terminal subscriptions, because some transitions fire no webhook.
+  - Webhooks for purged accounts hit a content-free tombstone and get a 200.
 
-### D-19 · Razorpay webhook replay protection (Type A)
-- **Why a different scheme:** Razorpay signs only the body and sends no timestamp header. Retries arrive for up to 24 hours, and manual replays for up to 15 days [RZP-WH-REPLAY-TIMESTAMP].
-- **Decision:**
-  - Verify the HMAC with `timingSafeEqual` on the raw body.
-  - Refuse to run with an empty secret.
-  - Support an optional previous secret, for rotation.
-  - Reject events whose `created_at` is more than 5 minutes in the future or more than 16 days old.
-  - Dedupe on the `x-razorpay-event-id` header and, because that header is unsigned, also on `sha256(raw body)`.
-  - Treat every event as a trigger: fetch `GET /v1/subscriptions/{id}` and apply that status. This makes out-of-order events harmless [RZP-WH-IDEMPOTENCY-EVENT-ID, RZP-WH-SIGNATURE].
-- **Daily reconcile:** the job also fetches non-terminal subscriptions, because some transitions (`expired`, failed authentication) fire no webhook.
+### D-20 · Razorpay hosted checkout, trial, USD, cancel (Type A)
+- **Subscription link:** `POST /v1/subscriptions` with `{plan_id, total_count: 120, quantity: 1, customer_notify: true, expire_by, notes: {autopilot_account_id}}`, then a 303 to `short_url` [RZP-CHECKOUT-HOSTED, RZP-SUB-CREATE-FIELDS].
+  - There is no return URL, so the billing page polls our DB.
+- **Trial:** if more than 1 day of trial remains, send `start_at = trial_end` and `expire_by = min(now + 7 d, start_at − 60 s)` [RZP-TRIAL-START-AT]. Otherwise omit `start_at` and use `expire_by = now + 7 d`.
+- **Cancel:**
+  - `authenticated` → `cancel_at_cycle_end: false`, immediately; the trial still runs to its end;
+  - `active` → `true`, at the end of the cycle.
+  - We call the REST API with `fetch`, not the SDK. The SDK's `cancel(id, {…false})` actually cancels at cycle end [RZP-SDK-PACKAGE].
+- **USD:** needs International Cards plus refund/cancellation and shipping policy pages [RZP-USD-INTERNATIONAL]. So `/refunds` and `/shipping` exist (`TODO: legal review`).
+- **"Fails silently" (brief §10.7):** server-side failures from a mismatched key pair are loud. We keep the same-generation rule plus a `GET /v1/plans/{id}` smoke test [RZP-API-KEYS].
 
-### D-20 · Razorpay hosted checkout, trial and USD (Type A)
-- **Hosted checkout:**
-  - "Hosted checkout" means a Subscription Link: `POST /v1/subscriptions` returns a `short_url` and we redirect with 303.
-  - The request body is `{plan_id, total_count: 120, quantity: 1, customer_notify: true, expire_by: now+7d, notes: {autopilot_account_id}}` [RZP-CHECKOUT-HOSTED, RZP-SUB-CREATE-FIELDS].
-  - Razorpay offers no return URL, so the billing page polls our database until a webhook or the reconcile job updates the status.
-- **Trial:** if the owner subscribes with more than a day of trial left, we pass `start_at = trial_end` so the free days are honoured [RZP-TRIAL-START-AT].
-- **USD:** charging $49 needs International Cards activated, which requires refund/cancellation and shipping policy pages [RZP-USD-INTERNATIONAL]. So `/refunds` and `/shipping` are added as `TODO: legal review` placeholders; the brief listed only `/privacy` and `/terms`.
-- **Cancel:** `POST /v1/subscriptions/{id}/cancel {"cancel_at_cycle_end": true}`. Access lasts to `current_end`.
-  - We call the Razorpay REST API with `fetch` rather than the SDK. The SDK's `cancel(id, {cancel_at_cycle_end:false})` silently cancels at cycle end [RZP-SUB-CANCEL-PAUSE-RESUME-FETCH, RZP-SDK-PACKAGE].
-- **"Fails silently" (brief §10.7):** a mismatched key id/secret fails loudly for server-side calls. The same-generation rule is still kept in WIRE_UP, with a `GET /v1/plans/{RAZORPAY_PLAN_ID}` smoke test [RZP-API-KEYS].
+### D-21 · Supabase keys, grants, RLS, Auth settings (Type A)
+- **Keys:** the new `sb_publishable_…` and `sb_secret_…` keys, both **server-only**. No `NEXT_PUBLIC_SUPABASE_*` variables; there is no browser Supabase client [SB-KEYS-MODEL].
+- **Every table:**
+  - `enable row level security`;
+  - `revoke all … from anon, authenticated`;
+  - `grant select, insert, update, delete … to service_role` (projects created after 2026-05-30 no longer auto-grant) [SB-RLS-NOT-DEFAULT, SB-DATA-API-GRANTS-2026].
+  - No policies.
+- **The migration also runs** `alter default privileges in schema public revoke execute on functions from public, anon, authenticated;`.
+- **WIRE_UP:**
+  - turn off "Allow new users to sign up";
+  - remove `public` from the Data API's exposed schemas;
+  - set Site URL and Redirect URLs.
 
-### D-21 · Supabase keys, grants and RLS (Type A)
-- **Keys:**
-  - Use the new `sb_publishable_…` and `sb_secret_…` keys. Supabase is deprecating the legacy `anon`/`service_role` keys by the end of 2026 [SB-KEYS-MODEL].
-  - "Service-role key" in the brief becomes "secret key" (`SUPABASE_SECRET_KEY`, server only).
-- **Every migration creating a table also:**
-  - runs `alter table … enable row level security;`;
-  - runs `revoke all … from anon, authenticated;`;
-  - runs `grant select, insert, update, delete … to service_role;`.
-- **Why the explicit grants:** projects created after 2026-05-30 no longer auto-grant table privileges [SB-RLS-NOT-DEFAULT, SB-DATA-API-GRANTS-2026].
-- **No RLS policies are defined.** All data access is server-side; RLS with no policies is default-deny for the Data API [SB-RLS-PATTERNS].
-- **The migration test asserts:**
-  - every public table has `relrowsecurity`;
-  - `anon` has no privileges;
-  - `service_role` has CRUD.
+### D-22 · Magic links (Type A)
+- **Generating links:** `auth.admin.generateLink` (secret key) is called only for:
+  - (a) a bound owner's email;
+  - (b) an account's `pending_owner_email` during onboarding;
+  - (c) an `ADMIN_EMAILS` address.
+  - Users are created first with `admin.createUser`.
+- **The link:** `${APP_URL}/auth/confirm#th=<hashed_token>&type=email`.
+  - The token sits in the URL **fragment**, so it never reaches server or Vercel logs.
+  - `type=email` works for both new and existing users; `magiclink` fails for new users [SB-MAGICLINK-TEMPLATES-NEWUSER, SB-MAGICLINK-FLOW].
+- **Confirming:**
+  - `GET /auth/confirm` shows a "Sign in" button.
+  - A nonce'd script copies the fragment into a same-origin POST.
+  - The POST calls `verifyOtp({token_hash, type})`, accepting only `email`, `magiclink` or `signup`.
+  - Link scanners can't consume it [SB-EMAIL-PREFETCH].
+- **`next` destination:** stored server-side, not in the URL. It must match `^/(dashboard|onboarding|admin)(/|$)`; otherwise `/dashboard`.
+- **/login:** always shows the same neutral response, takes ~800 ms whichever branch runs (so timing doesn't reveal whether an account exists), and is rate-limited.
+- **Fallback:** Supabase SMTP (Resend) is configured for any email Supabase sends itself [SB-SMTP-RESEND, SB-AUTH-EMAIL-LIMITS].
 
-### D-22 · Magic links: token-hash flow, sent by our own mailer, safe against link scanners (Type A)
-- **Generate:** `auth.admin.generateLink({type:'magiclink', email})`, with the secret key, server-side.
-  - Only for emails that already belong to an owner row, or for the onboarding step that sets the owner's email.
-  - Send `${APP_URL}/auth/confirm?token_hash=…&type=magiclink` through our `Mailer` (Resend live, outbox in fake mode).
-- **Confirm:**
-  - `GET /auth/confirm` renders a "Sign in" button.
-  - The `POST` calls `verifyOtp({ token_hash, type })`.
-  - This works across devices (desktop request, phone click) and survives Safe Links-style scanners that pre-click links [SB-MAGICLINK-FLOW, SB-EMAIL-PREFETCH].
-- **Login form:** `/login` always shows the same neutral response, to avoid revealing which emails have accounts [SB verifier note on `otp_disabled`].
-- **Fallback:** Supabase custom SMTP (Resend) is still configured in WIRE_UP for any email Supabase sends itself [SB-SMTP-RESEND, SB-AUTH-EMAIL-LIMITS].
-
-### D-23 · Sentry v11 restrictive configuration (Type A)
-- **Pin:** `@sentry/nextjs` 11.2.0 (exact). v11's defaults collect everything: bodies, headers, cookies, query strings and GenAI inputs/outputs [SENTRY-V11-DATA-DEFAULTS].
-- **Every `Sentry.init` uses one shared options object:**
-  - `dataCollection` set entirely to false/empty;
-  - no tracing at all (no `tracesSampleRate`, and `SENTRY_TRACES_SAMPLE_RATE` must stay unset);
+### D-23 · Sentry v11, restrictive (Type A)
+- **Pin:** `@sentry/nextjs@11.2.0`.
+- **One shared options module, `src/shared/observability/sentry-options.ts`:**
+  - no `server-only` import, so the client init can import it;
+  - all `dataCollection` options false or empty;
+  - no tracing;
   - `tracePropagationTargets: []`;
-  - integrations filtered to remove `Anthropic_AI` and `Console`;
-  - one pure scrubber in `beforeSend` and `beforeBreadcrumb` that rewrites `request.url`, `query_string` and `transaction` (including `/a/{token}/…`), and deletes request data, cookies and headers [SENTRY-GENAI-ANTHROPIC, SENTRY-HOOKS-STREAMING, SENTRY-URL-QUERY-LEAK, SENTRY-RECOMMENDED-CONFIG].
-- **Proof:** a pure-scrubber golden test, plus an envelope test that runs the real SDK through an in-memory transport [SENTRY-SCRUBBER-TEST].
-- **No `tunnelRoute`** and no Session Replay [SENTRY-TUNNEL-CSP].
+  - the `Anthropic_AI` and `Console` integrations removed;
+  - `beforeSend`/`beforeBreadcrumb` scrubbers rewrite request URL, query string and transaction (including `/a/{token}`), and delete request data, cookies and headers [SENTRY-V11-DATA-DEFAULTS, SENTRY-GENAI-ANTHROPIC, SENTRY-HOOKS-STREAMING, SENTRY-URL-QUERY-LEAK, SENTRY-RECOMMENDED-CONFIG].
+- **No browser Sentry** on `/a/*` or `/auth/*`.
+- **Server actions** are wrapped without `formData` or headers, with `recordResponse: false`.
+- **Proof:**
+  - a pure-scrubber golden test;
+  - an envelope test using the real `@sentry/node` and an in-memory transport [SENTRY-SCRUBBER-TEST];
+  - the fixtures include a real PGlite NOT NULL violation and a throwing Server Action.
 
-### D-24 · Anthropic call pattern (Type A)
-- **Call:** `messages.create` with `output_config.format = {type:'json_schema', schema}`.
-  - The schema comes from our own `toClaudeJsonSchema(zodSchema)`, which keeps `enum` and `additionalProperties:false` and moves unsupported keywords into descriptions.
-  - The response is validated with Zod and then with the deterministic validator.
-- **Why not `messages.parse` + `zodOutputFormat`:** the SDK helper moves `enum` into the description, so values are not constrained. `parse()` also throws on invalid output and loses `usage` [AI-SO-TS-ENUM, AI-SO-PARSE-SEMANTICS, AI-SDK-STRUCTURED-CALL-PATTERN].
-- **Schema limits:** `maxItems`, `minLength` and min/max are not supported in structured-output schemas. So `faqs ≤ 8` and the word limits are enforced in code [AI-SO-SCHEMA-LIMITS].
-- **Fields:** every field is required, and nullable where needed.
-- **Per-model parameters** come from `buildModelParams(model, purpose)` [AI-MODEL-CAPABILITY-MAP, AI-SONNET55-REQUEST, AI-HAIKU45-REQUEST, AI-REQUEST-RECOMMENDATIONS]:
+### D-24 · Anthropic: call pattern, errors, fallbacks (Type A)
+- **Call:** `messages.create` with `output_config.format = {type:'json_schema', schema: toClaudeJsonSchema(zod)}`.
+  - The project helper keeps `enum`; the SDK helper strips it [AI-SO-TS-ENUM, AI-SO-PARSE-SEMANTICS].
+  - Enum strings are lowercased before Zod parsing (casing isn't guaranteed) [AI-SO-SCHEMA-LIMITS].
+  - Limits the schema can't express (FAQs ≤ 8, word limits) are enforced in code.
+  - `flags` is a **closed enum**: `asks_pricing`, `urgent`, `non_english`, `missing_info`, `possible_spam`, `sensitive_topic`, `other`.
+- **Per-model parameters** (`buildModelParams`) [AI-MODEL-CAPABILITY-MAP, AI-SONNET55-REQUEST, AI-HAIKU45-REQUEST, AI-REQUEST-RECOMMENDATIONS]:
 
-| Model | Purpose | thinking | effort | max_tokens |
-|---|---|---|---|---|
-| `claude-sonnet-5-5` | drafts and follow-ups | `between_tools` | `medium` (env) | 1024 |
-| `claude-sonnet-5-5` | business brief | adaptive | `high` | 16000 |
-| `claude-haiku-4-5-20251001` | classification | omitted | omitted | 256 |
+| Model / purpose | thinking | effort | max_tokens |
+|---|---|---|---|
+| Sonnet 5.5, drafts | `ANTHROPIC_DRAFT_THINKING` (default `between_tools`) | `ANTHROPIC_DRAFT_EFFORT` (default `medium`) | `ANTHROPIC_DRAFT_MAX_TOKENS` (default 1024) |
+| Sonnet 5.5, brief | adaptive | `high` | 16000; fallback `between_tools`/`high`/4096 if the time budget binds |
+| Sonnet 5.5, classification (if the fast model is swapped) | `between_tools` | `low` | 256 |
+| Haiku 4.5, classification | omitted | omitted | 256 |
 
-- **Never sent:** sampling parameters, assistant prefill, `tool_choice`.
-- **Stop reasons:** `refusal` → no retry, "needs your touch". `max_tokens` → a failed attempt.
-- **Server-side fallbacks:** not enabled [AI-SERVER-FALLBACK].
-- **Logging:** the SDK runs with `logLevel: 'warn'`, and SDK error messages are never logged, because they can contain model output [AI-SDK-LOGGING-PRIVACY].
+  - Never sent: sampling parameters, prefill, `tool_choice`.
+- **Errors** [AI-SDK-ERRORS-RETRIES]:
+  - **TRANSIENT:** `APIConnectionError`/`Timeout`, `APIUserAbortError`, `InternalServerError`, `ConflictError`, and `RateLimitError` with `retry-after`. The job returns 5xx.
+  - **FATAL-CONFIG:** 400, 401, 403, 404, 402, 413, and the spend-cap 429. "Needs your touch" goes out at once, plus an admin alert.
+- **Output-level failures:**
+  - `refusal` → no retry, needs-touch;
+  - `max_tokens` → counts as the one retry.
+- **Classification never blocks a lead.** Any classification failure becomes `unclear`, which gets a draft.
+- **Never silent:**
+  - On the final QStash delivery of `lead_process` or `followup` (`Upstash-Retried` = retries), and in its failure callback, the owner gets the "needs your touch" email built from the minimal safe template, which needs no LLM.
+  - `allow_pricing` from the model is ignored: generated briefs always start with `false`.
+  - A refused brief opens an empty editable form.
+  - SDK `logLevel: 'warn'`. SDK error messages are never logged [AI-SDK-LOGGING-PRIVACY].
+  - Server-side fallbacks are off [AI-SERVER-FALLBACK].
 
 ### D-25 · Haiku 4.5 retirement exposure (Type A)
-- **Fact:** Haiku 4.5's retirement floor is "not sooner than 2026-10-15" [AI-MODEL-HAIKU45]. Anthropic gives at least 60 days' notice.
-- **Decision:** `ANTHROPIC_MODEL_FAST` can be switched to `claude-sonnet-5-5` with no code change, because the parameter builder handles both models.
-- **Cost tracking** uses a rate table keyed by `response.model` [AI-PRICING-COST].
+- **Fact:** retirement is not sooner than 2026-10-15, with at least 60 days' notice [AI-MODEL-HAIKU45].
+- **Decision:** `ANTHROPIC_MODEL_FAST=claude-sonnet-5-5` works with no code change (D-24 row).
+- **Monitoring:** a retired-model 404 alerts the admin. Costs are keyed by `response.model` [AI-PRICING-COST].
 
 ### D-26 · Email link scanners (Type A)
-- **Dismiss:** `GET /a/{token}/dismiss` shows a confirmation page; only the `POST` dismisses. Corporate scanners pre-click links in emails [SB-EMAIL-PREFETCH].
-- **Send:**
-  - `GET /a/{token}/send` records the click but ignores `HEAD` requests and requests whose user agent matches a known scanner.
-  - A click never counts as a confirmed send (law 3).
+- **Dismiss:** `GET /a/{t}/dismiss` shows a confirmation page; only the POST dismisses [SB-EMAIL-PREFETCH].
+- **What counts as a click:** not a `HEAD`, not a scanner user agent, and either at least 60 s after the email was sent or a nonce'd beacon from the interstitial or edit page.
+- **Copy:** "opened the send link (not confirmed)". Clicks are never confirmed sends (law 3).
 - **Tracking:** Resend click and open tracking stay off.
 
 ---
 
 ## B. Choices where the brief is silent
 
-### D-27 · Data access layer
-- **Decision:** a thin `Db` interface with hand-written SQL repositories.
-  - **Live:** `postgres` (Postgres.js) on Supabase's **transaction pooler** (port 6543), `{ max: 1, prepare: false, ssl: 'require' }`, created once at module scope. This is Supabase's documented serverless setting.
-  - **Tests and fake mode:** PGlite runs the same SQL.
-- **Why:** the brief wants PGlite tests, and supabase-js `.from()` cannot run on PGlite. Real SQL coverage of the purge, idempotency and report queries is worth more than fake repositories.
-- **Pipelining safeguard:** Supabase warns that pipelining on the transaction pooler can return mismatched rows. So the `Db` wrapper serialises every query on a client, and multi-statement work runs inside a single transaction [SB-DB-ACCESS-LAYER].
+### D-27 · Owner-facing emails: Reply-To and the "don't reply" line
+- **Reply-To:**
+  - Owner emails about leads (new lead, needs touch, follow-up, reply detected, inbox test) set Reply-To to the **owner's own address**.
+  - They never use the lead's address (that would hand the lead our tokens) or our support inbox.
+  - `EMAIL_REPLY_TO` is used only for magic-link and billing emails.
+- **Templates:** each lead template opens with "Don't reply to this email. Tap 'Send from my email'."
 
-### D-28 · Extra ports for zero-credential runs
-- **Decision:** add `Clock` (needed for time travel in the simulation) and `AuthProvider` (magic links go to the outbox in fake mode) to the brief's six ports.
-- **Switch:** `APP_MODE=fake|live` selects every adapter. Fake mode runs PGlite, persisted under `./.data/pglite` for `npm run dev`, or in memory for tests and simulation.
+### D-28 · Data access layer
+- **Approach:** a thin `Db` interface with SQL repositories.
+  - **Live:** Postgres.js on the Supabase transaction pooler (`:6543`, `{max:1, prepare:false, ssl:'require'}`) [SB-DB-ACCESS-LAYER].
+  - **Tests and fake mode:** PGlite, running the same SQL.
+- **Rules:**
+  - (1) queries run one at a time per client, never concurrently;
+  - (2) `Db.tx(fn)` passes a `tx` handle; the root handle throws if used while a transaction is open in the same async context (`AsyncLocalStorage`);
+  - (3) **no transaction is ever held across network I/O**;
+  - (4) concurrency control is single-statement compare-and-set or lease updates only, because PGlite's sequential tests can prove those;
+  - (5) every logical timestamp and time comparison uses a bound `$now` from `Clock`. `now()` and `default now()` are allowed only for audit-only `created_at`. A test scans the SQL; lint bans `Date.now()`, argument-less `new Date()` and `DateTime.now()` outside `SystemClock`.
+  - (6) drivers are normalised: `int8 → string`, `bytea` is never used (hex `text`);
+  - (7) driver errors are rethrown as `DbError{sqlstate, constraint, table, column}`, never carrying `detail`, query text or parameters.
 
-### D-29 · Extra tables beyond brief §6
-- **Decision:** add these tables. All are RLS-enabled with the same grants; the only content is the owner's test address, cleared after 24 h.
+### D-29 · Extra ports and fake-mode safety
+- **Extra ports:** `Clock` and `AuthProvider` join the brief's six ports.
+- **`APP_MODE`** is required (no default).
+  - `fake` is refused when `VERCEL_ENV ∈ {production, preview}` unless `ALLOW_FAKE_ON_VERCEL=1`.
+  - Fake mode uses fixed, documented fake secrets, and live mode rejects them.
+  - `/dev/*` routes need fake mode.
+- **Fake mode is complete without credentials:**
+  - `/dev/fake-hubspot/authorize` (consent);
+  - `/dev` actions: submit lead, log owner send, log lead reply, revoke token, opt out contact, advance clock, run due jobs;
+  - a dev job ticker every 10 s;
+  - a `dev_outbox` table;
+  - fake state and the clock offset persisted in PGlite.
+- **PGlite** lives in a lazy `globalThis` singleton (`serverExternalPackages`) and is never opened at import time or from `proxy`/`instrumentation`.
+
+### D-30 · Extra tables and columns beyond brief §6
+- **Extra tables:**
   - `baselines`
   - `inbox_checks`
-  - `ai_calls` (token and cost per LLM call, no content)
-  - `rate_limits` (salted hashes only)
-  - `leases` (stops overlapping cron runs, because session advisory locks don't survive the transaction pooler)
-- **Columns added to brief tables:**
-  - per-form intake cursors on `selected_forms`;
-  - the debounce marker and journal offset on `hubspot_connections`;
-  - `short_url`, `grace_until` and sync timestamps on `subscriptions`.
-- **Every job kind** is a row in `scheduled_jobs` (the admin page's "failed jobs").
+  - `ai_calls`
+  - `rate_limits`
+  - `leases`
+  - `portal_history` (content-free tombstone: portal id + first trial start, so a purge and reinstall can't restart the trial)
+  - `billing_tombstones` (purged subscription ids)
+  - `dev_outbox` (fake mode only)
+  - `_migrations` (ledger)
+- **Columns added to brief tables:** `processing_state` on `accounts` and on `leads`, cursor and floor on `selected_forms`, leases on `scheduled_jobs` and `hubspot_connections`, reservation status on `notifications_sent`, and more. PLAN §5 has the full list.
 
-### D-30 · What "form message" covers (law 4)
-- **Decision:** `lead_messages` holds the content the lead typed into the form: message, first name, last name, company, email. It has `purge_at = submitted_at + 30 days`.
-- **What stays in `leads`:** HubSpot IDs, the form ID, timestamps, statuses and classification only.
-- **Why:** the compose links need the lead's address and name.
+### D-31 · Law 4: which lead fields count as "form message" (sign-off)
+- **Stored in `lead_messages`:** what the lead typed into the form, and nothing else: message, first name, last name, company, email.
+- **Retention:** `purge_at = submitted_at + 30 d` (test leads: + 24 h).
+- **Why:** the compose links need the address and name.
 - **After the purge:** the UI shows "Contact #123 (details removed after 30 days)" with a HubSpot link.
+- **`leads` keeps only IDs, timestamps and statuses.**
+  - `submission_key` = HubSpot `conversionId`, else `HMAC(K_dedupe, formId|submittedAt|lower(email))`.
+  - It is nulled when the content is purged.
 
-### D-31 · Lead status: one value shown, with a precedence rule
-- **Shown status:** `dismissed` > `replied` > `filtered` > `no_reply` > `send_confirmed` > `send_clicked` > `drafted`.
-  - Internal states also exist: `new`, `processing`, `needs_touch` (shown as `drafted` with a "needs your touch" badge).
-  - `no_reply` is labelled "No confirmed reply". It is set when the last follow-up step has run with no confirmed reply, or 7 days after notification if follow-ups are off.
-- **The weekly report** counts from timeline timestamps, not from the shown status, so clicked and confirmed are never merged.
+### D-32 · Lead status shown to the owner
+`deriveLeadStatus(lead, now)` is a pure function; the result is never stored. Precedence:
 
-### D-32 · Quiet hours apply to follow-ups only
-- **Decision:** the first "new lead" email goes out immediately (core loop: "within about a minute").
-- **Quiet hours (default 19:00–08:00) and skipped weekends (default on)** apply to scheduling the follow-up jobs. A job that would fall in quiet time moves to the next allowed whole hour in the portal's timezone.
+1. `dismissed`
+2. `replied` (`replied_at > replies_ignored_before`)
+3. `filtered` (filtered class, not overridden)
+4. `not processed` (failed / skipped / deferred)
+5. `no reply` (labelled "No reply from lead (none logged)"; follow-ups finished or off, and at least 2 days since the last owner email)
+6. `send confirmed`
+7. `send clicked` (labelled "opened the send link")
+8. `drafted`
+9. `processing`
 
-### D-33 · Follow-ups when the first send isn't confirmed
-- **Decision:** the follow-up is still drafted (brief §1.4).
-- **The owner email says so honestly:** "We couldn't confirm in HubSpot that your first reply was sent". The draft is written as a gentle nudge that doesn't assume the first email arrived.
+`leads.processing_state ∈ {new, processing, notified, filtered, deferred, failed, skipped}` is the only stored lifecycle field.
 
-### D-34 · One account per portal, one owner
-- **Decision:** a HubSpot portal maps to exactly one account with one owner user (multi-user teams are out of scope).
-- **Binding the owner:** the OAuth callback sets a signed, httpOnly `pending_install` cookie (account id, 30 minutes). The first magic-link login on that browser binds the owner.
-  - Reinstalling into a portal that already has an owner requires that owner's session.
-  - Otherwise the page says the portal is already connected and shows the owner's email masked.
+### D-33 · Quiet hours and the follow-up schedule
+- **Scope:** quiet hours apply to follow-ups only; the first "new lead" email is immediate.
+- **Defaults:** 19:00–08:00, skip weekends = on.
+- **Constraints:**
+  - hours are 0–23;
+  - `start = end` means no quiet hours;
+  - settings with no allowed hour in a week are rejected.
+- **Targets:** `shiftToAllowed(T0.plus({days: n}) in portal zone)` moves the time to the next whole allowed hour, searching at most 8 days.
+  - A deterministic per-account offset of 0–10 min is added only when the time was shifted, so Monday bursts are spread out.
+- **At fire time:** if the current settings forbid "now", the job is re-targeted (hop) rather than sent.
 
-### D-35 · Rate limiting without Redis
-- **Decision:** Postgres fixed-window counters in `rate_limits`, keyed by a salted hash of the IP and route.
-  - `/a/*`: 30/min per IP and 20/min per token.
-  - `/login`: 5 per 15 min per IP and 3 per 15 min per email.
+### D-34 · Honest notes on follow-ups
+- **Every follow-up email to the owner states:**
+  - when HubSpot hasn't confirmed the first send: "We couldn't confirm in HubSpot that your first reply was sent";
+  - when replies aren't logged: "HubSpot isn't logging replies for you, so check your inbox before sending".
+
+### D-35 · Owner binding, reconnect, reinstall
+- **Binding at the email step:**
+  - `/onboarding/email` requires the signed `pending_install` cookie.
+  - It is pre-filled with the installer's email from token introspection.
+  - It stores `accounts.pending_owner_email`, a nonce hash and an expiry (+30 min), then sends the magic link.
+- **Binding after login:**
+  - After login in **any** browser, `POST /onboarding/bind` binds the owner only if the verified session email equals `pending_owner_email`, the nonce matches, and an atomic `UPDATE … WHERE owner_user_id IS NULL AND pending_owner_expires_at > $now` succeeds.
+  - Cross-device works; login CSRF can't bind a stranger.
+  - `users` has a unique `lower(email)`.
+- **Reinstall into an owned portal:**
+  - **With** the owner's session: reactivate (status active; clear `purge_after`, `disconnected_at`, `status_reason` and `reconnect_email_sent_at`; floors move to now).
+  - **Without** it: no account changes. The page says "Sign in as the owner to reconnect" (`/login`, with `next` stored server-side). The owner is emailed "HubSpot was reconnected by another user".
+- **Install permission:** installing needs a Super Admin or "App Marketplace Access". This is stated under the Install button and on the install-failed page.
+
+### D-36 · Rate limits and per-account caps
+- **Rate limits:** Postgres fixed-window counters keyed by HMAC(IP/route).
+  - `/a/*`: 30/min per IP, 20/min per token.
+  - `/login`, `/onboarding/email`: 5/15 min per IP, 3/15 min per email, at most 3 distinct emails per pending install.
   - `/api/hubspot/install`: 20/min per IP.
-- **Why:** no Redis in the stack; the counters are pruned daily.
+  - Brief generation: 5 per account per day, 1 at a time.
+- **Per-account caps** (env):
+  - `MAX_DRAFTED_LEADS_PER_DAY=50`: overflow leads become `deferred`, with no LLM call. One "lead limit reached" email per day links to the dashboard.
+  - Global `AI_DAILY_BUDGET_USD`: a breaker that stops drafting and alerts.
+- **HubSpot per-portal limiter:** ≤ 9 req/s general and ≤ 4 req/s search, stored in Postgres [HS-RATE-LIMITS].
+- **Resend:** `rate_limit_exceeded`, `concurrent_idempotent_requests` and `application_error` are transient. Report publishes are staggered (`notBefore + i s`).
 
-### D-36 · "Lead to first reply" in the Monday report
-- **Interpretation:**
-  - "Median time from lead to confirmed first reply" = submission → the owner's first **confirmed send**.
-  - "Leads with no confirmed reply" = leads whose owner reply is not confirmed in HubSpot. That is the actionable list.
-  - "Replies confirmed" = the **lead's** replies detected.
-- **Minimum sample:** medians are shown only when n ≥ 3; otherwise "Not enough data".
+### D-37 · Monday report wording and honesty
+- **Labels:**
+  - "Leads in"
+  - "Filtered (spam etc.)"
+  - "Drafts emailed to you"
+  - "Sends confirmed in HubSpot"
+  - "Opened the send link (not confirmed)"
+  - "Median time to your first logged reply email" (n ≥ 3, else "Not enough data")
+  - "Leads you haven't replied to (no send logged in HubSpot)", with record links (first 20 + "and N more")
+  - "Replies from leads"
+  - "Follow-ups drafted"
+  - "Compared with your baseline" (only when both sides are sufficient)
+- **"Reply" means only the lead's reply,** everywhere.
+- **Honesty rules:** a count over 0 is always shown (it is confirmed). A 0 is shown as "Not enough data" when:
+  - (replies) `logging_mode ≠ log_all`, or the email scope is missing;
+  - (sends) `logging_mode ∈ {none, unknown}`, or the email scope is missing.
+- **The list** "leads you haven't replied to" is replaced by "We can't confirm sends in HubSpot for your account" when sends aren't logged.
 
-### D-37 · When the baseline is "not enough logged history"
-- **No logged emails at all:** if the portal has zero logged `EMAIL` engagements in the last 30 days, or the email scope is missing, show the lead count only and "Not enough logged history" for the median and for "no logged outbound".
-  - Otherwise every lead would look unanswered.
+### D-38 · When the baseline is "not enough logged history"
+- **If the portal has no logged `EMAIL` at all in 30 days, or the scope is missing:** show the lead count only, with "Not enough logged history" for the other two figures.
 - **Median:** shown only when at least 3 leads have a logged outbound email.
+- **Outbound email** counts only when the lead is a recipient.
 
-### D-38 · Simulation calendar
-- **Setup:** portal timezone `America/New_York`, quiet hours 19:00–08:00, weekends skipped.
-- **Timeline:**
-  - Day 0 = Tuesday 2026-10-06, 10:00.
-  - Day 2 = Thursday, follow-up 1.
-  - Day 3 = Friday, the lead replies.
-  - Day 5 = Sunday: follow-up 2 is due but weekends are skipped, so it moves to Monday 08:00.
-  - Monday 2026-10-12, 08:00: follow-up 2 jobs run first, then the Monday report.
-- **Why:** this shows the weekend rule and keeps the brief's day 0 / 2 / 5 / Monday order.
+### D-39 · Simulation calendar
+- **Owner settings:** portal timezone `America/New_York`; quiet hours 19:00–08:00; **weekends allowed** (the owner works weekends); 1 notify email; Gmail; BCC on.
+  - Day 5 therefore runs the brief's literal "job fires → reply detected" path.
+  - Weekend shifting is covered by unit tests.
+- **Calendar:**
+  - Pre-run: Tue 2026-10-06, 09:00–09:30.
+  - Day 0: Tue 10:00.
+  - Day 2: Thu.
+  - Day 3: Fri, the lead replies.
+  - Day 5: Sun.
+  - Monday 2026-10-12 08:00: the report.
+  - Wednesday 10-14 12:00: final statuses.
+- **Time:** time travel steps through every job and cron tick in order. The run is repeated with the system clock set to 2030, and must give the same result.
 
-### D-39 · HubSpot client written from scratch
-- **Decision:** plain `fetch` plus Zod over the ~12 endpoints we use.
-- **Why:** `@hubspot/api-client` 14 targets legacy paths, and `@hubspot/sdk` is alpha [HS-SDK-CHOICE].
-- **Rate limiting:** a per-portal limiter keeps general calls at ≤ 9/s and search at ≤ 4/s [HS-RATE-LIMITS].
+### D-40 · HubSpot client
+- **Approach:** plain `fetch` + Zod over about 14 endpoints, with the D-03 request allow-list and the D-36 limiter.
+- **Why:** `@hubspot/api-client` uses legacy paths, and `@hubspot/sdk` is alpha [HS-SDK-CHOICE].
 
-### D-40 · Node, TypeScript, lint and test tooling
-- **Node:** 22 LTS (`>=22.12`). This satisfies Next 16, Sentry v11 and supabase-js 2.117. The sandbox has 22.22. Vercel runs 22.x or 24.x.
-- **TypeScript:** 5.9.x. TypeScript 7 is the native compiler and is not yet supported by `typescript-eslint` (needs `<6.1`).
-- **Lint:** ESLint 9 flat config with `eslint-config-next@16` and `typescript-eslint`. `no-restricted-imports` enforces module boundaries.
-- **Tests:** Vitest 4.1.x.
-- **Styling:** Tailwind 4.
-- **Validation:** Zod 4.
-- **Dates:** Luxon for timezones.
-- **Email templates:** `react-email` 6 (single package) for templates and rendering.
+### D-41 · Tooling
+- **Runtime:** Node `>=22.12`.
+- **Language:** TypeScript 5.9 (TypeScript 7 isn't supported by `typescript-eslint`).
+- **Lint:** ESLint 9 flat config (`eslint-config-next@16`, `typescript-eslint`, boundary rules with `allowTypeImports`).
+- **Libraries:** Vitest 4.1, Tailwind 4, Zod 4, Luxon, `react-email` 6.
+- **Explicit dev dependencies:** `@sentry/node`, `@sentry/core`, `jose`.
+- **`server-only` under Vitest and tsx:** aliased to an empty stub (`vitest.config` alias; `tsconfig.scripts.json` paths).
+- **Every milestone gate** runs `APP_MODE=fake next build` plus a smoke `next start`.
 
-### D-41 · Owner override and "pause all"
-- **Filtered lead:** the owner can mark it "This is a real lead". That re-runs drafting and notification and sets `classification_override=true`.
-- **Pause all:** an internal flag (`accounts.paused_at`). It stops intake processing, notifications and follow-ups. It is **not** a Razorpay pause.
-- **What happens to leads while paused:** the poller skips the account entirely, so no HubSpot reads happen.
-  - On resume, or when billing becomes active again, the form cursors move to "now". Leads that arrived while paused are not drafted after the fact.
-  - The dashboard says so plainly: "Leads that arrived while Autopilot was paused were not processed."
+### D-42 · Override, resume, pause
+- **"This is a real lead":** `process_rev + 1`, then the job is re-enqueued with dedupe `…:process:r{rev}`.
+- **"Resume follow-ups"** (e.g. after an out-of-office auto-reply):
+  - `replies_ignored_before = now`;
+  - `followup_stream + 1`;
+  - only the follow-ups not yet sent are rescheduled, at `shiftToAllowed(max(T0 + n days, now + 1 h))`.
+- **Pause all** is `accounts.processing_state = paused`, an internal state and not a Razorpay pause.
+  - While paused, the poller skips the account.
+  - On resume or reactivation, intake floors move to now, so leads that arrived while paused are not drafted. The dashboard says so.
 
-### D-42 · Marketplace install cap
-- **Fact:** apps with marketplace distribution are capped at 25 installs until listed on the HubSpot Marketplace [HS-MARKETPLACE-INSTALL-CAP].
-- **Decision:** listing assets stay out of scope (§11). Paid growth beyond 25 portals is blocked until the listing is approved, so this goes in README and RISKS.
-- **Built to listing rules from day one:** OAuth only, dated OAuth endpoints, the uninstall API on disconnect, encrypted tokens, and less than 5% error responses.
-- **Listing description:** describe the app as a lead-response product, not an "AI connector".
+### D-43 · Marketplace install cap
+- **Fact:** 25 installs until the app is listed [HS-MARKETPLACE-INSTALL-CAP].
+- **Decision:** listing assets stay out of scope (§11), and the cap is a documented launch limit.
+- **We build to the listing rules now:**
+  - dated OAuth endpoints;
+  - the uninstall API on disconnect;
+  - encrypted tokens;
+  - less than 5% error responses;
+  - described as a lead-response product, not an "AI connector".
 
-### D-43 · A newer lead supersedes an older one for the same contact
-- **Decision:** when a new lead is created for a contact that already has an open lead with pending follow-ups, the older lead's follow-ups are cancelled (`stop_reason = 'superseded'`).
-- **Why:** the same person never receives two parallel follow-up streams. The new lead gets its own draft and follow-ups.
+### D-44 · A newer lead supersedes an older one for the same contact
+- **Rule:** supersede is a **dynamic** stop, checked before every follow-up send. A lead is superseded when a newer, non-test lead for the same contact has already been notified.
+- **Effect:** a filtered newer lead never cancels a real older one.
 
-### D-44 · Action tokens are reusable until they expire, except dismiss
-- **Decision:**
-  - Send and edit tokens can be used repeatedly within their 7 days, because the owner may tap "Send" twice. Each use is counted.
-  - A dismiss token is single-use.
-  - Every notification email mints its own three tokens, bound to that email's draft.
-- **Token format:** `apt_` + base64url(32 random bytes). The prefix lets the log and Sentry scrubbers recognise tokens. Only the SHA-256 hash is stored.
+### D-45 · Action tokens
+- **Format:** `apt_` + base64url(HMAC-SHA256(K_action, `notificationKey|purpose`)).
+  - Tokens are deterministic per notification, so a retried email renders byte-identically and Resend idempotency holds.
+  - Only `sha256(token)` is stored, with its purpose, lead and draft, expiring after 7 days.
+- **Reuse:** send and edit tokens are reusable until expiry and counted. A dismiss token is single-use.
+- **Revocation:** tokens are revoked on disconnect and on privacy deletion. Token checks also reject accounts that are disconnected or pending purge.
+
+### D-46 · Notification addresses and BCC changes
+- **Verification:** every notify address other than the owner's verified login email gets a confirmation link (`verify_notify` token, 7 days). It receives nothing until confirmed.
+- **Change alerts:** any change to the notify addresses or the BCC address triggers an alert email to the owner's address.
+- **BCC check:** the BCC address is soft-checked against `@bcc.*hubspot.com` and `@forward.*hubspot.com`, and is shown on the send, copy and edit pages.
+
+### D-47 · Defending against lead-controlled text
+- **The subject's first name is sanitised:**
+  - no control characters or newlines;
+  - at most 40 characters;
+  - if it contains a URL, `@` or mostly digits, the subject falls back to "New lead — your reply is ready".
+- **Display:** the lead's message is shown under "Message from the lead (unverified)", with URLs defanged (`example[.]com`). This applies in emails, the edit page and the dashboard.
+- **Extra validator codes:**
+  - `url_not_allowed`: any URL or domain other than the booking link and the brief's site host;
+  - `contact_not_allowed`: email addresses or phone numbers not in the brief;
+  - `addresses_owner`: "note to owner/assistant/AI", "ignore previous", and similar;
+  - `echoes_lead`: 12 or more consecutive words copied from the lead.
+- **Brief builder:**
+  - drops hidden DOM (`display:none`, `hidden`, `aria-hidden`, `template`, comments);
+  - `booking_link` must be https and appear in the fetched pages;
+  - the editor shows its host and asks the owner to confirm it.
+
+### D-48 · Account lifecycle and purge
+- **States:** `accounts.processing_state ∈ {onboarding, active, paused, inactive, revoked, disconnected}`, computed by a pure function.
+  - Transitions are applied by compare-and-set; only the caller that wins acts:
+    - → active: floors move to now, and purge fields are cleared;
+    - active → inactive: one billing email, keyed by the transition time;
+    - → revoked or disconnected: `purge_after = now + 30 d`.
+- **Orphan installs:** an install with no bound owner after 7 days gets the uninstall API call, the token wipe and an immediate purge.
+- **The purge guard re-checks** that no connection is active.
+- **Billing on purge:**
+  - It cancels any live Razorpay subscription first (`cancel_at_cycle_end: false`; `pending`/`halted` → skip and alert).
+  - Disconnect asks whether to cancel billing too.
+  - After the purge, a tombstone keeps late webhooks harmless.
+
+### D-49 · Where content can live, and for how long
+- **Retention runs hourly as well as daily,** so content never outlives 30 d + 1 h.
+- **Content stores and retention:**
+  - `lead_messages`: 30 d
+  - `drafts` (subject, body and flags): 30 d
+  - test-lead content: 24 h
+  - `inbox_checks.test_address`: 24 h
+  - `dev_outbox`: fake mode only, git-ignored
+  - Resend: retention per plan, to be checked in WIRE_UP; we choose ≤ 30 days or record a deviation
+  - Anthropic API: per its commercial policy, re-checked in WIRE_UP
+  - Supabase backups/PITR: the backup window, disclosed
+  - QStash payloads: ids only
+  - Sentry/logs: scrubbed, no content
+  - Vercel request logs: may contain action-token paths; no log drains, shortest retention
+  - the owner's mailbox: owner-controlled
+- **Pages showing personal data** (`/a/*`, `/auth/*`, `/onboarding/*`, `/dashboard/*`, `/admin`) send `Cache-Control: private, no-store` and `X-Robots-Tag: noindex`.
+
+### D-50 · Milestones regrouped (brief §9 order kept)
+Each milestone ships the pieces it needs:
+- M2 gets `entitled()`, `processing_state`, `renderEmail` and the reconnect template.
+- M3 gets action tokens, `/a/{t}/send|copy`, the compose builders, and the magic-link and inbox-test templates, all needed by login and the inbox check.
+- M4 gets `shiftToAllowed` and follow-up scheduling.
+- M5 runs follow-up jobs.
+- The simulation grows a stage per milestone, and CI runs it from M1.
+
+### D-51 · Keys and rotation
+- **Ciphertext format:** `v1.<kid>.<iv>.<ct>.<tag>`, where kid = the first 8 hex characters of sha256(key). The AAD binds each ciphertext to its connection and field.
+- **Rotation:**
+  - a daily job re-encrypts rows that don't use the current kid, and `/admin` shows how many remain;
+  - `TOKEN_ENCRYPTION_KEY_PREVIOUS` is used for decryption only;
+  - `HUBSPOT_CLIENT_SECRET_PREVIOUS` is used for webhook verification only.
+- **Per-purpose keys:** derived with HKDF(`APP_SECRET`) for `state`, `pending`, `ratelimit`, `dedupe`, `action` and `fake-session`.
+- **`env.ts` asserts:**
+  - each key decodes to 32 bytes;
+  - current ≠ previous;
+  - no fake or default values in live mode.
