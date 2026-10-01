@@ -6,7 +6,7 @@ Every place where official documentation overrides the brief, and every choice m
 - **Type B:** the brief is silent, so we chose the simplest option that satisfies it (§0.5).
 - **Brief change:** we changed something the brief states outright, for the reason given. These are also listed in PLAN §1.1.
 
-Status: every entry is **proposed**, pending the owner's `approve` of `docs/PLAN.md`. This is revision 4, after three plan-review rounds.
+Status: every entry is **proposed**, pending the owner's `approve` of `docs/PLAN.md`. This is revision 5, after four plan-review rounds.
 
 ---
 
@@ -292,7 +292,7 @@ These six entries change something the brief states outright, or interpret one o
 - **Applying changes:**
   - The event is only a trigger: we `GET /v1/subscriptions/{id}` and apply that state, but only if it is newer (`last_synced_at`).
   - Each account's daily job reconciles non-terminal subscriptions.
-  - Webhooks for purged accounts hit a content-free tombstone. We fetch the subscription: `authenticated`/`active` → cancel (`cancel_at_cycle_end: false`) and alert the admin to refund; terminal → mark the tombstone resolved. Then 200. The daily cron reconciles unresolved tombstones the same way (D-48).
+  - Webhooks for purged accounts hit a content-free tombstone. We fetch the subscription: `authenticated`/`active` → cancel (`cancel_at_cycle_end: false`) and alert the admin to refund; terminal → mark the tombstone resolved. Then 200. The daily cron reconciles unresolved tombstones the same way (D-48). A webhook for an unknown subscription (no row, no tombstone) gets a 200 and an admin warning.
 
 ### D-20 · Razorpay hosted checkout, trial, USD, cancel (Type A, brief change)
 - **Subscription link:** `POST /v1/subscriptions` with `{plan_id, total_count: 120, quantity: 1, customer_notify: true, expire_by, notes: {autopilot_account_id}}`, then a 303 to `short_url` [RZP-CHECKOUT-HOSTED, RZP-SUB-CREATE-FIELDS].
@@ -488,7 +488,7 @@ These six entries change something the brief states outright, or interpret one o
 ### D-35 · Owner binding, reconnect, reinstall
 - **Email step:** `/onboarding/email` requires the signed `pending_install` cookie (24 h).
   - It is pre-filled with the installer's email from token introspection.
-  - It stores `accounts.pending_owner_email` and `pending_owner_expires_at` (+24 h), creates or reuses the auth user (kept in `pending_owner_auth_user_id`; when the email changes, the previous one is deleted only if no `users` row has that `auth_user_id` and no other account lists it as `pending_owner_auth_user_id`), and sends the magic link with an `onboarding` login intent.
+  - It stores `accounts.pending_owner_email` and `pending_owner_expires_at` (+24 h), creates or reuses the auth user (kept in `pending_owner_auth_user_id`; if the stored id differs from the user for the new email, the previous user is deleted only if no `users` row has that `auth_user_id` and no other account lists it as `pending_owner_auth_user_id`), and sends the magic link with an `onboarding` login intent.
   - If the email already owns another Autopilot account, it says so (one owner per account).
 - **Bind:** in the `/auth/confirm` POST, in **any** browser, after `verifyOtp`, as **one statement**:
   - `WITH b AS (UPDATE accounts SET owner_user_id=$u, pending_owner_email=NULL, pending_owner_expires_at=NULL, pending_owner_auth_user_id=NULL WHERE id=$intent.account_id AND owner_user_id IS NULL AND lower(pending_owner_email)=$verifiedEmail AND pending_owner_expires_at > $now RETURNING id) INSERT INTO users (auth_user_id, account_id, email) SELECT $u, b.id, $verifiedEmail FROM b`;
@@ -515,7 +515,7 @@ These six entries change something the brief states outright, or interpret one o
   - `MAX_DRAFTED_LEADS_PER_DAY=50`, counted **after** classification, so spam is still filtered. Overflow leads become `deferred` with no draft call. One "lead limit reached" email per day links to the dashboard.
   - Global `AI_DAILY_BUDGET_USD` (default 25): a breaker that stops drafting and alerts the admin, bounding classification floods too. While it is tripped, leads get the needs-touch email with the minimal safe template, so nothing is silent.
 - **HubSpot per-portal limiter:** ≤ 9 req/s general and ≤ 4 req/s search, stored in Postgres [HS-RATE-LIMITS].
-- **Resend:** `rate_limit_exceeded`, `concurrent_idempotent_requests` and `application_error` are transient. Report publishes are staggered.
+- **Resend:** `rate_limit_exceeded`, `concurrent_idempotent_requests`, `application_error`, `internal_server_error`, any status ≥ 500 and a null status (network) are transient. `daily_quota_exceeded` and `monthly_quota_exceeded` are transient too, with one admin alert. Everything else (`validation_error`, key or domain errors) is permanent. Report publishes are staggered.
 
 ### D-37 · Monday report wording and honesty
 - **Wording rule:** an unqualified "reply"/"replied" always means **the lead's** reply: lead statuses, "Replies from leads", "{Name} replied — follow-ups stopped". Anything the owner sends is always qualified with "you", "your" or "from you": "your reply is ready" (brief subject), "your first reply", "Copy your reply", "% with no logged reply from you".
@@ -601,7 +601,7 @@ These six entries change something the brief states outright, or interpret one o
 - **Committed before send:** tokens are minted when the notification is reserved, and their hashes are **committed before** `Mailer.send`.
   - A retry after a crash re-mints tokens. If Resend then answers 409 `invalid_idempotent_request` for our reserved key, the email already went out with the first, committed tokens, so we mark it sent.
 - **Reuse:** send and edit tokens are reusable until expiry and counted. A dismiss token is single-use.
-- **Takeover and resume:** a reservation still `sending` can be taken over by the paired kind (new_lead↔needs_touch, follow_up↔needs_touch share a key) through a compare-and-set on its kind; only `sent` blocks. The takeover re-checks the new kind's predicates (PLAN §8.4). The sweeper resumes `sending` reservations older than 10 min, at most 5 send attempts and within 23 h of the first reservation (inside Resend's 24 h idempotency window); older or exhausted rows become `failed` with an admin alert. A non-transient, non-409 send error marks the row `failed` at once, with one alert. `reconnect` and `billing_inactive` re-check that the connection is still revoked, or the account still inactive, before a resumed send. `magic_link` rows can't be re-rendered (the hashed token isn't stored) and are marked `failed`; the owner asks for a new link.
+- **Takeover and resume:** a reservation still `sending` can be taken over by the paired kind (new_lead↔needs_touch, follow_up↔needs_touch share a key) through a compare-and-set on its kind; only `sent` blocks. The takeover re-checks the new kind's predicates (PLAN §8.4). The sweeper resumes `sending` reservations at doubling intervals (10 min up to 2 h) until 23 h after the first reservation (inside Resend's 24 h idempotency window); job deliveries don't count against this. Older rows become `failed` with an admin alert. A send error that D-36 classifies as permanent marks the row `failed` at once, with one alert. `reconnect` and `billing_inactive` re-check that the connection is still revoked, or the account still inactive, before a resumed send. `magic_link` rows can't be re-rendered (the hashed token isn't stored) and are marked `failed`; the owner asks for a new link.
 - **Revocation:** tokens are revoked on revoke, disconnect and privacy deletion. Token checks also reject accounts that are disconnected or pending purge.
 
 ### D-46 · Notification addresses and BCC changes
@@ -645,7 +645,7 @@ These six entries change something the brief states outright, or interpret one o
   - it cancels a live `authenticated`/`active` subscription first (`cancel_at_cycle_end: false`);
   - `paused`, `pending` and `halted` can't be cancelled through the API: the purge still runs at 30 days (brief §5.14), and the admin is alerted to cancel the subscription in the Razorpay dashboard;
   - the Disconnect dialog explains those states;
-  - after the purge, tombstones (`billing_tombstones` keeps each non-terminal subscription's id and last status) keep late webhooks harmless. The webhook route and a daily reconcile in the daily cron (which needs no account) fetch every unresolved tombstoned subscription: `authenticated`/`active` → cancelled at once and the admin alerted to refund any charge; terminal → resolved.
+  - after the purge, tombstones (`billing_tombstones` keeps every subscription's id, last status and `expire_by`; terminal ones are resolved at once) keep late webhooks harmless. The webhook route and a daily reconcile in the daily cron (which needs no account; 50 rows a run, least recently checked first) fetch unresolved tombstoned subscriptions: `authenticated`/`active` → cancelled at once and the admin alerted to refund any charge; terminal, or `created` past `expire_by` → resolved; `pending`/`halted`/`paused` stay open and are re-checked in rotation.
 
 ### D-49 · Where content can live, and for how long (sign-off for the Law 4 reading)
 - **Retention runs hourly as well as daily,** so content never outlives 30 d + 1 h.
