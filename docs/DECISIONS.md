@@ -6,19 +6,20 @@ Every place where official documentation overrides the brief, and every choice m
 - **Type B:** the brief is silent, so we chose the simplest option that satisfies it (§0.5).
 - **Brief change:** we changed something the brief states outright, for the reason given. These are also listed in PLAN §1.1.
 
-Status: every entry is **proposed**, pending the owner's `approve` of `docs/PLAN.md`. This is revision 3, after two five-lens/three-lens plan reviews.
+Status: every entry is **proposed**, pending the owner's `approve` of `docs/PLAN.md`. This is revision 4, after three plan-review rounds.
 
 ---
 
 ## Needs your explicit sign-off
 
-These five entries change something the brief states outright, or interpret one of its product laws. Each involves a judgment call. They are approved together with the plan unless you say otherwise. PLAN §1.1 lists every other change to the brief.
+These six entries change something the brief states outright, or interpret one of its product laws. Each involves a judgment call. They are approved together with the plan unless you say otherwise. PLAN §1.1 lists every other change to the brief.
 
 1. **D-01:** Next.js 16 instead of 14. 14.x is out of security support, with 23 open advisories (2 critical).
 2. **D-03:** the extra HubSpot scope `sales-email-read`. It is read-only, but HubSpot's consent screen will say it allows reading the **content** of all logged emails in the portal. Autopilot requests only five metadata properties (dates, direction, status, from/to addresses) and never reads subjects or bodies, and `/privacy` says so. HubSpot's `forms` scope also technically permits edits. Autopilot never makes any, and a code allow-list enforces that.
 3. **D-31 (Law 4):** we read "the lead's form message" as the lead's submitted message plus first name, last name, company and email. Any missing value is filled from the same-named HubSpot contact property (the fallback in brief §5.2). Nothing else is stored, and it is all purged at 30 days. The compose links need the address and name.
 4. **D-13:** brief §5.5 says "302 to the compose URL". On phones and for the "Other" mail client, we instead show a page that opens the mail app automatically, because a 302 to `mailto:` leaves a blank tab. That should stay one tap. If a browser blocks the automatic open, the owner taps the button (two taps); PLAN §17 #5 checks this.
 5. **D-18:** the checkout guard blocks on `authenticated`, `active`, `pending`, `halted` and `paused`, and never on `created`. Processing also runs while `authenticated` (a trial-start subscription) and while `pending` within the 3-day grace. The brief said to block only on `active`/`halted`, and to process only while `active` (plus 3 days' grace).
+6. **D-49 (Law 4):** we read "never log tokens" as applying to the logs and error reports we write, which never contain them. Vercel's own platform request logs record request paths, so they include the action token in `/a/{token}/…` links. We add no log drains, keep the shortest retention, and tokens expire after 7 days.
 
 ---
 
@@ -117,7 +118,7 @@ These five entries change something the brief states outright, or interpret one 
 ### D-08 · Confirmed sends and replies (Type A)
 - **Confirmed send:** an email engagement associated with the contact where all of these hold [HS-CONFIRMED-SEND]:
   - `hs_email_direction = EMAIL`;
-  - `hs_timestamp ≥ notified_at − 60 s`;
+  - `hs_timestamp ≥ first_notified_at − 60 s`;
   - status is absent or `SENT`;
   - the lead's email (or one of `hs_additional_emails`) is among the recipients in `hs_email_to_email`.
 - **Confirmed reply:** an engagement associated with the contact where all of these hold [HS-REPLY-SIGNAL]:
@@ -130,7 +131,7 @@ These five entries change something the brief states outright, or interpret one 
   - `send_confirmed_at` and `replied_at` = the earliest qualifying `hs_timestamp`, written monotonically (`LEAST`);
   - `signals_checked_at` records when we looked.
 - **Reads:** the contact `GET … &associations=emails`, following `paging.next` through the dated associations endpoint, then `emails/batch/read` in chunks of 100 [HS-EMAIL-BY-CONTACT].
-- **One `markReplied()`** (`UPDATE … WHERE replied_at IS NULL RETURNING`): the caller that wins cancels the remaining follow-ups. If follow-ups were still scheduled (the caller is a follow-up job, or it cancelled at least one), it also sends "{Name} replied — follow-ups stopped"; a reply found after follow-ups finished only updates the status. Any later caller gets no row back and does nothing.
+- **One `markReplied()`** (`UPDATE … WHERE replied_at IS NULL RETURNING`): the caller that wins cancels the remaining follow-ups. If follow-ups were still scheduled (the caller is a follow-up job, or it cancelled at least one), it also sends "{Name} replied — follow-ups stopped"; a reply found after follow-ups finished only updates the status. The update, the follow-up cancellations and the `reply_detected` reservation (`sending`) are **one transaction**; the email is sent after commit, and a lost send is resumed (D-45). Any later caller gets no row back and does nothing.
 - **Test leads** (`is_test`) are excluded from every signal refresh, from `applySignals` and from `markReplied`.
 
 ### D-09 · Follow-up hard stops read from the contact (Type A)
@@ -167,6 +168,7 @@ These five entries change something the brief states outright, or interpret one 
 - **Brief §5.1's "exponential backoff (max 5 attempts), then a Sentry alert":** jobs are published with `Upstash-Retries: 4` and `Upstash-Retry-Delay: pow(2, retried) * 10000`. That is 5 deliveries, waiting 10, 20, 40 and 80 s between them. The failure callback raises the Sentry alert, and the connection stays active.
 - **Long waits:** a 477, or any `Retry-After` over 60 s, re-schedules the job (`notBefore = now + Retry-After`). A daily-limit 429 defers to the next local midnight.
 - **API 401:** refresh once. If that refresh is classified `revoked`, mark the connection revoked; otherwise treat it as transient.
+- **Inline callers** (the poll cron, the lead-page refresh) have no QStash backoff. Each transient refresh failure increments `transient_failures`, and the poll cron skips the portal until `next_refresh_attempt_at = now + 2^n × 5 min`. The fifth consecutive failure raises one Sentry alert; success resets the count. The connection stays active.
 
 ### D-12 · Account timezone, UI domain, hub domain (Type A)
 - **Source:** `GET /account-info/2026-09/details` (scope `oauth`), read at install and in each account's daily job. It provides `timeZone`, `utcOffsetMilliseconds`, `uiDomain` and `dataHostingLocation` [HS-ACCOUNT-DETAILS].
@@ -181,7 +183,7 @@ These five entries change something the brief states outright, or interpret one 
   - Work base: `https://outlook.cloud.microsoft/mail/deeplink/compose`.
   - Personal base: `https://outlook.live.com/mail/deeplink/compose`.
   - Configurable: `COMPOSE_OUTLOOK_MODE` (`mailtouri|params`), `COMPOSE_OUTLOOK_WORK_BASE`, `COMPOSE_OUTLOOK_PERSONAL_BASE`.
-- **Phone user agent or client "Other":** a 200 interstitial whose nonce'd script opens the `mailto:` URL on load, with a button and "Copy reply" as fallbacks [CMP-REDIRECT-IMPLEMENTATION, CMP-GMAIL-MOBILE].
+- **Phone user agent or client "Other":** a 200 interstitial whose nonce'd script opens the `mailto:` URL on load, with a button and "Copy your reply" as fallbacks [CMP-REDIRECT-IMPLEMENTATION, CMP-GMAIL-MOBILE].
 - **Desktop Gmail/Outlook:** a 302 (`NextResponse.redirect(url, 302)`; the default would be 307).
 - **Length check:** if the final URL is over `COMPOSE_URL_LIMIT=1800` characters, show the copy-reply page instead. The check runs per client [CMP-URL-LENGTH-LIMITS].
 - **"Edit first":** the form POST returns a 200 page with the compose link as a button, never a 302. A CSP `form-action` would otherwise block the Google or Microsoft sign-in redirect for signed-out owners. CSP `form-action` therefore stays `'self'`.
@@ -197,11 +199,13 @@ These five entries change something the brief states outright, or interpret one 
   - The owner taps "Send from my email" and sends it from their own mailbox.
   - We wait up to 10 min for an `EMAIL` to that address.
   - Before sending, we call `GET contacts/{testEmail}?idProperty=email`. On a 404 with no BCC saved, we ask the owner either to add their BCC address or to submit one of their own forms with the test address.
-  - While a check is open, intake **skips** any submission whose email HMAC equals the check's `test_address_hmac`.
+  - The check row (with `test_address_hmac`) is created as soon as the owner enters the test address, before the contact lookup.
+  - Intake **skips** any submission whose email HMAC equals the `test_address_hmac` of a check created in the last 24 h, open or closed, and counts it as processed for the cursor. This holds on an active account too, where the check can be re-run from the dashboard.
 - **Live test, reply leg:** the owner replies from the test address, and we wait up to 10 min for an `INCOMING_EMAIL` from it.
 - **Runs in the background:** an `inbox_check` job re-checks every 60 s until each leg resolves or its 10-minute window ends, whatever the account's state.
   - The owner can "Continue — we'll keep checking" or "Skip for now" (`logging_mode=unknown`, with a dashboard reminder).
   - The legs' own check writes only `inbox_checks` and `logging_mode`. It never calls `markReplied`.
+- **Test leads** never get follow-up jobs, never supersede and never count in metrics (signals: D-08).
 - **Logging mode:** `logging_mode ∈ {unknown, log_all, sends_only, none}`. Follow-up emails carry a plain warning when replies can't be detected, and the Monday report says "Not enough data" (D-37).
 - **Fix-step copy** distinguishes "test contact missing" from "not logged". KB-derived claims are re-checked in WIRE_UP check #4.
 - **Brief change:** brief §5.7 has one live test; we add the reply leg, because BCC never logs replies.
@@ -228,6 +232,7 @@ These five entries change something the brief states outright, or interpret one 
   - expired leases;
   - `weekly_report` jobs that `failed` while `weekly_reports.attempts < 3` and before local Tuesday 00:00 (the compare-and-set resets the job's claim count).
   - Any other row whose `scheduled_jobs.attempts ≥ 6` gets the failure path instead of a re-publish.
+  - It also resumes `notifications_sent` rows still `sending` 10 min after `reserved_at` (D-45).
 - **Failure callback:** `/api/jobs/failed` acts only through a compare-and-set: `UPDATE … SET status='failed' WHERE id=$1 AND external_id=$sourceMessageId AND (status='scheduled' OR (status='running' AND lease_until < $now)) RETURNING`. A job that a live attempt still holds is left alone. Only that winner runs the failure path:
   - Sentry alert;
   - for `lead_process`, the "needs your touch" email;
@@ -266,7 +271,7 @@ These five entries change something the brief states outright, or interpret one 
   - **block** on `authenticated`, `active`, `pending`, `halted`, `paused`;
   - **allow** when there is no subscription, or it is `created`, `expired`, `cancelled`, `completed` or `stale` [RZP-SUB-DECLINED-CREATED-GUARD].
   - **Never block on `created`:** reuse its `short_url` while `expire_by > now` and (`start_at` is null or `start_at > now`).
-  - A `created` row that can't be reused is first re-fetched from Razorpay and its real status applied. If the fetch fails, it is marked `stale` locally (excluded from the one-`created` partial index). Only then is a new subscription created, so a declined card can never lock the owner out.
+  - A `created` row that can't be reused is first re-fetched from Razorpay, and a status other than `created` is applied. If Razorpay still says `created` (it documents no expiry at `expire_by`), or the fetch fails, the row is marked `stale` locally (excluded from the one-`created` partial index). Past `expire_by` the customer can no longer authorise it, and the second-live-subscription rule below covers anything unexpected. Only then is a new subscription created, so a declined or abandoned checkout can never lock the owner out.
 - **Billing page actions:**
   - `pending`/`halted`: "Update payment method" (the stored `short_url`);
   - `paused`: "Resume subscription" (`POST /v1/subscriptions/{id}/resume {"resume_at":"now"}`) [RZP-SUB-CANCEL-PAUSE-RESUME-FETCH].
@@ -328,7 +333,7 @@ These five entries change something the brief states outright, or interpret one 
   - The POST is rate-limited. It calls `verifyOtp({token_hash, type})`, accepting only `email`, `magiclink` or `signup`.
   - It then reads the login intent and, for `onboarding`, binds the owner (D-35) in the same request.
   - Link scanners can't consume it [SB-EMAIL-PREFETCH].
-- **`next` destination:** must match `^/(dashboard|onboarding|admin)(/|$)`; otherwise `/dashboard`.
+- **`next` destination:** parsed with `new URL(next, APP_URL)`. It must be same-origin and its pathname must match `^/(dashboard|onboarding|admin)(/|$)`; the query string is kept (e.g. `/dashboard?reconnect=1`). Otherwise `/dashboard`.
 - **/login:** always shows the same neutral response, takes ~800 ms whichever branch runs (so timing doesn't reveal whether an account exists), and is rate-limited.
 - **Fallback:** Supabase SMTP (Resend) is configured for any email Supabase sends itself [SB-SMTP-RESEND, SB-AUTH-EMAIL-LIMITS].
 
@@ -356,7 +361,7 @@ These five entries change something the brief states outright, or interpret one 
 | Model / purpose | thinking | effort | max_tokens | Notes |
 |---|---|---|---|---|
 | Sonnet 5.5, drafts | `ANTHROPIC_DRAFT_THINKING` (`between_tools`) | `ANTHROPIC_DRAFT_EFFORT` (`medium`) | `ANTHROPIC_DRAFT_MAX_TOKENS` (1024) | |
-| Sonnet 5.5, brief | adaptive | `ANTHROPIC_BRIEF_EFFORT` (`high`) | 16000 | Per call: `{timeout: remainingMs, signal: AbortSignal.timeout(remainingMs)}`. A **second** attempt (any previous attempt, or an abort) uses `between_tools`/`high`/4096. After the final delivery the job fails and the owner gets the empty editable form |
+| Sonnet 5.5, brief | adaptive | `ANTHROPIC_BRIEF_EFFORT` (`high`) | 16000 | Per call: `{timeout: remainingMs, signal: AbortSignal.timeout(remainingMs)}`. Any delivery after the first (`brief_jobs.attempts`, read before this delivery increments it, is ≥ 1, or a previous attempt aborted) uses `between_tools`/`high`/4096. After the final delivery the job fails and the owner gets the empty editable form |
 | Sonnet 5.5, classification (if the fast model is swapped) | `between_tools` | `low` | 256 | |
 | Haiku 4.5, classification | omitted | omitted | 256 | |
 
@@ -393,7 +398,7 @@ These five entries change something the brief states outright, or interpret one 
   - Owner emails about leads (new lead, needs touch, follow-up, reply detected, inbox test) set Reply-To to the **owner's own address**.
   - They never use the lead's address (that would hand the lead our tokens) or our support inbox.
   - `EMAIL_REPLY_TO` is used only for magic-link and billing emails.
-- **Templates:** each lead template opens with "Don't reply to this email. Tap 'Send from my email'."
+- **Templates:** each lead template opens with "This email isn't monitored. To answer the lead, tap 'Send from my email'."
 
 ### D-28 · Data access layer
 - **Approach:** a thin `Db` interface with SQL repositories.
@@ -404,7 +409,7 @@ These five entries change something the brief states outright, or interpret one 
   - (2) `Db.tx(fn)` passes a `tx` handle; the root handle throws if used while a transaction is open in the same async context (`AsyncLocalStorage`);
   - (3) **no transaction is ever held across network I/O**;
   - (4) concurrency control is single-statement compare-and-set or lease updates only, because PGlite's sequential tests can prove those;
-  - (5) every logical timestamp, including the `created_at` columns that drive behaviour (`accounts`, `subscriptions`, `brief_jobs`, `scheduled_jobs`), is bound from `Clock` as `$now`.
+  - (5) every logical timestamp, including the `created_at` columns that drive behaviour (`accounts`, `subscriptions`, `brief_jobs`, `scheduled_jobs`, `login_intents`) and `accounts.last_install_at`, is bound from `Clock` as `$now`.
     - `default now()` is allowed only on audit-only columns (`audit_log.at`, `webhook_events.received_at`), which are on a scan allow-list.
     - Lint bans `Date.now()`, argument-less `new Date()` and `DateTime.now()` outside `SystemClock`.
   - (6) drivers are normalised: `int8 → string`, `bytea` is never used (hex `text`);
@@ -482,16 +487,16 @@ These five entries change something the brief states outright, or interpret one 
 ### D-35 · Owner binding, reconnect, reinstall
 - **Email step:** `/onboarding/email` requires the signed `pending_install` cookie (24 h).
   - It is pre-filled with the installer's email from token introspection.
-  - It stores `accounts.pending_owner_email` and `pending_owner_expires_at` (+24 h), creates the auth user, and sends the magic link with an `onboarding` login intent.
+  - It stores `accounts.pending_owner_email` and `pending_owner_expires_at` (+24 h), creates the auth user (kept in `pending_owner_auth_user_id`; the previous one is deleted if the email changes and owns no account), and sends the magic link with an `onboarding` login intent.
   - If the email already owns another Autopilot account, it says so (one owner per account).
-- **Bind:** in the `/auth/confirm` POST, in **any** browser, after `verifyOtp`:
-  - `UPDATE accounts SET owner_user_id=$u, pending_owner_email=NULL WHERE id=$intent.account_id AND owner_user_id IS NULL AND lower(pending_owner_email)=$verifiedEmail AND pending_owner_expires_at > $now RETURNING`;
-  - then insert `users`.
+- **Bind:** in the `/auth/confirm` POST, in **any** browser, after `verifyOtp`, as **one statement**:
+  - `WITH b AS (UPDATE accounts SET owner_user_id=$u, pending_owner_email=NULL, pending_owner_expires_at=NULL, pending_owner_auth_user_id=NULL WHERE id=$intent.account_id AND owner_user_id IS NULL AND lower(pending_owner_email)=$verifiedEmail AND pending_owner_expires_at > $now RETURNING id) INSERT INTO users (auth_user_id, account_id, email) SELECT $u, b.id, $verifiedEmail FROM b`;
+  - on a unique violation nothing is bound, and the page says "This email already owns an Autopilot account".
   - No cookie or nonce is needed. A login-CSRF can't bind a stranger, because the verified email must equal the pending email.
   - `users` has a unique `lower(email)`.
 - **OAuth callback branches:**
-  - (a) **New portal:** create the account. The trial comes from `portal_history` if present, else now + 14 d. Issue `pending_install` → `/onboarding/email`.
-  - (b) **Existing, never bound** (`owner_user_id IS NULL`, not purged): store the fresh tokens, set the connection active, reset the `pending_owner_*` fields, keep the trial, issue a new `pending_install` → `/onboarding/email`.
+  - (a) **New portal:** create the account with `last_install_at = now`. The trial comes from `portal_history` if present, else now + 14 d. Issue `pending_install` → `/onboarding/email`.
+  - (b) **Existing, never bound** (`owner_user_id IS NULL`, not purged): store the fresh tokens, set the connection active, set `last_install_at = now` (restarting the orphan clock), reset the `pending_owner_*` fields, keep the trial, issue a new `pending_install` → `/onboarding/email`.
   - (c) **Existing, owned, with the owner's session:** reactivate. Connection active; clear `purge_after`, `disconnected_at`, `status_reason` and `reconnect_email_sent_at`; then `applyProcessingState` (floors move forward).
   - (d) **Existing, owned, without the owner's session:** change nothing.
     - If the introspected installer email equals the owner's email, show "Sign in to finish reconnecting" and email a magic link (next `/dashboard?reconnect=1`).
@@ -512,7 +517,7 @@ These five entries change something the brief states outright, or interpret one 
 - **Resend:** `rate_limit_exceeded`, `concurrent_idempotent_requests` and `application_error` are transient. Report publishes are staggered.
 
 ### D-37 · Monday report wording and honesty
-- **Wording rule:** an unqualified "reply"/"replied" always means **the lead's** reply: lead statuses, "Replies from leads", "{Name} replied — follow-ups stopped". Anything the owner sends is always phrased with "you/your": "your reply is ready" (brief subject), "your first reply".
+- **Wording rule:** an unqualified "reply"/"replied" always means **the lead's** reply: lead statuses, "Replies from leads", "{Name} replied — follow-ups stopped". Anything the owner sends is always qualified with "you", "your" or "from you": "your reply is ready" (brief subject), "your first reply", "Copy your reply", "% with no logged reply from you".
 - **Labels:**
   - "Leads in"
   - "Filtered (spam etc.)"
@@ -533,7 +538,7 @@ These five entries change something the brief states outright, or interpret one 
 
 ### D-38 · Baseline population and sufficiency
 - **Population:** the baseline uses the **same population** as the weekly comparison. The 30 days of historical submissions are classified with the fast model **in memory**: nothing is stored, at most 500 submissions (above that, "Not enough data"). Only `lead`/`unclear` count.
-- **Figures:** lead count; median time to the first logged email **to** the lead (n ≥ 3); and the % with none (only if the portal has any logged `EMAIL` in 30 days, and the email scope is granted).
+- **Figures:** lead count; median time to the first logged email **to** the lead (n ≥ 3); and the number of leads with none, with that as a % of the lead count (only if the portal has any logged `EMAIL` in 30 days, and the email scope is granted).
 - **Otherwise** show "Not enough logged history".
 
 ### D-39 · Simulation calendar
@@ -595,7 +600,8 @@ These five entries change something the brief states outright, or interpret one 
 - **Committed before send:** tokens are minted when the notification is reserved, and their hashes are **committed before** `Mailer.send`.
   - A retry after a crash re-mints tokens. If Resend then answers 409 `invalid_idempotent_request` for our reserved key, the email already went out with the first, committed tokens, so we mark it sent.
 - **Reuse:** send and edit tokens are reusable until expiry and counted. A dismiss token is single-use.
-- **Revocation:** tokens are revoked on disconnect and on privacy deletion. Token checks also reject accounts that are disconnected or pending purge.
+- **Takeover and resume:** a reservation still `sending` can be taken over by the paired kind (new_lead↔needs_touch, follow_up↔needs_touch share a key) through a compare-and-set on its kind; only `sent` blocks. The sweeper resumes `sending` reservations older than 10 min, re-checking the kind's predicates (D-15). `magic_link` rows can't be re-rendered (the hashed token isn't stored) and are marked `failed`; the owner asks for a new link.
+- **Revocation:** tokens are revoked on revoke, disconnect and privacy deletion. Token checks also reject accounts that are disconnected or pending purge.
 
 ### D-46 · Notification addresses and BCC changes
 - **Verification:** every notify address other than the owner's verified login email gets a confirmation link (`verify_notify` token, 7 days). It receives nothing until confirmed.
@@ -623,24 +629,24 @@ These five entries change something the brief states outright, or interpret one 
 ### D-48 · Account lifecycle and purge (brief change: orphan uninstall)
 - **One function:** `applyProcessingState(accountId, $now)` recomputes `processing_state` from `(account incl. paused_at and onboarding_completed_at, connection, current subscription)`, in this order: disconnected, revoked, onboarding, paused, inactive, active.
   - Every writer calls it: actions, the OAuth callback, the token manager, disconnect, billing, onboarding completion and the poll cron.
-  - The new state is applied by compare-and-set, and only the caller that wins acts:
+  - The new state is applied by compare-and-set **in one transaction with all of the transition's database side effects** (no network I/O inside, D-28). One-shot emails are reserved (`sending`) in that transaction and sent after commit; QStash cancels also run after commit. Only the caller that wins acts:
     - → active: floors move to now, and purge fields are cleared;
-    - active → inactive: one billing email, keyed by the transition time;
-    - → revoked or disconnected: `purge_after = now + 30 d`.
+    - → inactive (from any state): one billing email, keyed `billing-inactive:{acct}:{entitlement_lost_at}` (trial end, the subscription's status change, or the end of grace), so pause → trial ends → resume still sends it, once;
+    - → revoked or disconnected: `purge_after = now + 30 d`; jobs cancelled; action tokens revoked.
 - **Onboarding complete** requires all of:
   - an owner-saved brief (`brief_versions.source='owner'`, `booking_link_choice ≠ unset`);
   - at least one selected form;
   - saved preferences with at least one notify address.
   - The inbox check and baseline may finish in the background.
-- **Orphan installs:** an install with no bound owner after 7 days gets the uninstall API call, the token wipe and an immediate purge. HubSpot emails the portal's admins about the uninstall.
+- **Orphan installs:** an install with no bound owner, `last_install_at` more than 7 days ago and no unexpired pending owner gets the uninstall API call, the token wipe, deletion of the pending auth user, and an immediate purge. A branch-(b) reinstall restarts the clock. HubSpot emails the portal's admins about the uninstall.
 - **Purge:**
   - the guard re-checks that no connection is active;
   - it cancels a live `authenticated`/`active` subscription first (`cancel_at_cycle_end: false`);
-  - for `paused`, `pending` or `halted` it **skips** the purge and alerts the admin;
+  - `paused`, `pending` and `halted` can't be cancelled through the API: the purge still runs at 30 days (brief §5.14), and the admin is alerted to cancel the subscription in the Razorpay dashboard;
   - the Disconnect dialog explains those states;
-  - after the purge, a tombstone keeps late webhooks harmless.
+  - after the purge, tombstones (`billing_tombstones` keeps each subscription's id and last status) keep late webhooks harmless. A tombstoned subscription later seen `authenticated` or `active` (webhook or daily reconcile) is cancelled at once, and the admin is alerted to refund any charge.
 
-### D-49 · Where content can live, and for how long
+### D-49 · Where content can live, and for how long (sign-off for the Law 4 reading)
 - **Retention runs hourly as well as daily,** so content never outlives 30 d + 1 h.
 - **Stores and retention:**
   - `lead_messages`: 30 d
@@ -654,14 +660,15 @@ These five entries change something the brief states outright, or interpret one 
   - Sentry/logs: scrubbed
   - Vercel request logs: may contain action-token paths; no log drains, shortest retention
   - the owner's mailbox: owner-controlled
+- **Law 4 reading (sign-off):** "never log tokens" applies to the logs and error reports we write (logger, Sentry), which never contain tokens. Vercel's platform request logs record request paths, so they include the action token in `/a/{token}/…` links. We add no log drains and keep the shortest retention; tokens expire after 7 days and are revoked on disconnect.
 - **/privacy** gives day counts only for stores we control. Sub-processors are named and their policies linked.
 - **Pages showing personal data** send `Cache-Control: private, no-store` and `X-Robots-Tag: noindex`.
 
 ### D-50 · Milestones regrouped (brief §9 order kept; brief change)
-- **M1:** placeholder `/` and `/login` pages, so the build-and-smoke gate passes.
-- **M2:** `entitled()`, `applyProcessingState`, `renderEmail` and the reconnect template. FakeLLM's parameter assertion. A simulation seed helper that creates an active account (M3 replaces it with the real onboarding).
-- **M3:** action tokens, `/a/{t}/send|copy`, the compose builders, and the magic-link and inbox-test templates, which login and the inbox check need.
-- **M4:** `shiftToAllowed` and follow-up scheduling.
+- **M1:** placeholder `/` and `/login` pages and `GET /api/health`, so the build-and-smoke gate passes.
+- **M2:** `entitled()`, `applyProcessingState`, `renderEmail` and the reconnect template; the `privacy_delete` handler (its webhook arrives in M2). FakeLLM's parameter assertion. A simulation seed helper that creates an active account (M3 replaces it with the real onboarding).
+- **M3:** action tokens, `/a/{t}/send|copy|verify-notify`, the compose builders, and the magic-link, inbox-test and verify-notify templates, which login, preferences and the inbox check need.
+- **M4:** `shiftToAllowed`, follow-up scheduling and `deriveLeadStatus`.
 - **M5:** follow-up jobs.
 - **Simulation:** grows a stage per milestone, and CI runs it from M1.
 
@@ -676,3 +683,7 @@ These five entries change something the brief states outright, or interpret one 
   - each key decodes to 32 bytes;
   - current ≠ previous;
   - no fake or default values in live mode.
+
+### D-52 · REVIEW verdicts: PASS / PARTIAL / FAIL (brief change)
+- **Decision:** REVIEW reports each Definition-of-Done line as PASS, PARTIAL or FAIL. PARTIAL means the line rests on evidence that is only community- or knowledge-base-level, and it names the PLAN §17 live check that will settle it.
+- **Why:** brief §0.1 asks for "pass/fail per line", but some facts can only be confirmed against live accounts, which this sandbox has none of (brief §0.3). Reporting them as PASS would overstate (law 3).

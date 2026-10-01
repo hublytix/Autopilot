@@ -1,17 +1,17 @@
 # Hublytix Autopilot v1: build plan
 
-Status: **PLAN, revision 3 (after two plan-review rounds), awaiting approval.** Reply `approve` to start EXECUTE at M1.
+Status: **PLAN, revision 4 (after three plan-review rounds), awaiting approval.** Reply `approve` to start EXECUTE at M1.
 
 Inputs:
 - `docs/BUILD_BRIEF.md`: the specification.
 - `docs/RESEARCH.md`: the verified facts. DECISIONS cites them by finding ID in [brackets]; full evidence is in `docs/research/*.md`.
-- `docs/DECISIONS.md`: D-01…D-51, every deviation from the brief and every choice where the brief is silent.
+- `docs/DECISIONS.md`: D-01…D-52, every deviation from the brief and every choice where the brief is silent.
 
 ---
 
 ## 1. What you are approving
 
-Five items need your explicit sign-off: **D-01, D-03, D-13, D-18, D-31** (listed at the top of DECISIONS). They are marked **sign-off** below. Everything else in §1.1 is either forced by vendor documentation or is a small change the brief would not reasonably object to; each row names its decision.
+Six items need your explicit sign-off: **D-01, D-03, D-13, D-18, D-31, D-49** (listed at the top of DECISIONS). They are marked **sign-off** below. Everything else in §1.1 is either forced by vendor documentation or is a small change the brief would not reasonably object to; each row names its decision.
 
 ### 1.1 Changes to things the brief states
 | # | Brief | Plan | Decision |
@@ -36,7 +36,9 @@ Five items need your explicit sign-off: **D-01, D-03, D-13, D-18, D-31** (listed
 | 18 | "Every Monday, the owner gets a short report" | Only accounts that are active with onboarding complete; none while paused, billing-inactive, revoked or disconnected | D-17 |
 | 19 | Purge disconnected portals after 30 days | Also: an install that nobody finishes signing up for within 7 days is uninstalled and purged at once. HubSpot emails the portal's admins about the uninstall | D-48 |
 | 20 | Milestone contents (brief §9) | Same order; small moves so each milestone ships what its gate needs | D-50 |
-| 21 | REVIEW reports "pass/fail per line" | **PASS / PARTIAL / FAIL**; PARTIAL names the §17 live check it depends on | §18 |
+| 21 | REVIEW reports "pass/fail per line" | **PASS / PARTIAL / FAIL**; PARTIAL names the §17 live check it depends on | D-52 (§18) |
+| 22 | Subject `New lead: {Name} — your reply is ready` | The lead's first name, sanitised (no control characters, at most 40 chars). When it contains a URL or an `@`, or is mostly digits, the subject is `New lead — your reply is ready` | D-47 |
+| 23 | Law 4: never log tokens | Our logs and Sentry never contain tokens. Vercel's platform request logs do record the paths of `/a/{token}/…` links; we add no log drains, keep the shortest retention, and tokens expire after 7 days | D-49 (**sign-off**) |
 
 ### 1.2 Behaviour choices where the brief is silent (what the owner will see)
 | Choice | What the owner will see | Decision |
@@ -53,6 +55,7 @@ Five items need your explicit sign-off: **D-01, D-03, D-13, D-18, D-31** (listed
 | Onboarding completes only with a saved brief | "Finish" stays disabled until you have saved your brief, picked at least one form and saved preferences with a notify address | D-48 |
 | `captured` (non-HubSpot) forms not offered in v1 | Only HubSpot forms and pop-ups appear in the form list | D-07 |
 | Reply-To on lead emails = your own address | Tapping "Reply" by mistake writes to yourself, not to us or the lead | D-27 |
+| A reinstall doesn't restart the trial | The 14 days count from the portal's first install, even after a purge and reinstall | D-30, D-35 |
 | "Replied" email only when follow-ups were stopped | A reply found after follow-ups have finished updates the status without an email | D-08 |
 
 ---
@@ -147,7 +150,7 @@ Five items need your explicit sign-off: **D-01, D-03, D-13, D-18, D-31** (listed
 | `LLM` | `classify`, `generateBrief`, `draft`, `draftFollowUp`, each returning `{value, usage, stopReason, model}` or a typed failure | Deterministic keyword classifier; validator-passing templated drafts; fault injection (`invalid`/`refusal`/`max_tokens`/`transient`/`fatal`/`slow`); asserts each request's parameters are valid for its model (`buildModelParams`, from M2) |
 | `Mailer` | `send({to, replyTo, subject, html, text, tags, idempotencyKey})` | Persists to `fake.dev_outbox` (dev), memory (tests) or `./outbox` (simulate). Same idempotency semantics as Resend (same key + same payload = original; different payload = 409 `invalid_idempotent_request`) |
 | `Scheduler` | `publish({jobId, kind, runAt, dedupeId, retries})` → `{messageId, deduplicated}`; `cancel(messageId)` | Ordered queue; `runDue(now)` calls an **injected** dispatch callback; simulates redelivery, crashes and exhausted retries (calls the failure handler) |
-| `Billing` | `createSubscription`, `fetchSubscription`, `cancelSubscription(id, atCycleEnd)`, `resumeSubscription`, `fetchPlan` | Fake subscriptions; `short_url` → `/dev/fake-checkout/{id}`, which emits signed fake webhooks; silent expiry of `created` subscriptions |
+| `Billing` | `createSubscription`, `fetchSubscription`, `cancelSubscription(id, atCycleEnd)`, `resumeSubscription`, `fetchPlan` | Fake subscriptions; `short_url` → `/dev/fake-checkout/{id}`, which emits signed fake webhooks; a future-start subscription stays `created` until `start_at`, as Razorpay documents |
 | `WebFetcher` | `fetch(url, {signal, maxBytes})` | Fixture website (`test/fixtures/site`) including `robots.txt`, nav/header/footer, hidden DOM, an injection sample and a slow page |
 | `AuthProvider` | `createUser`, `generateLink(email)` → `{hashedToken}`, `verify(tokenHash, type)`, `getVerifiedUser(req)`, `refreshSession(request, response)`, `signOut` | Links written to the outbox; signed `ap_session` cookie; rejects a wrong `type` for new users, as Supabase does |
 
@@ -177,11 +180,11 @@ The first migration is `supabase/migrations/20261001000001_init.sql`. Later mile
 
 | Table | Columns (key ones) | Content? |
 |---|---|---|
-| `accounts` | `hubspot_portal_id text unique`, `processing_state (onboarding\|active\|paused\|inactive\|revoked\|disconnected)` (derived, §6.1), `processing_state_changed_at`, `paused_at` (owner intent), `onboarding_completed_at`, `trial_started_at`, `trial_ends_at`, `timezone`, `timezone_source`, `logging_mode (unknown\|log_all\|sends_only\|none)`, `owner_user_id` (nullable), `pending_owner_email`, `pending_owner_expires_at` (+24 h), `disconnected_at`, `purge_after`, `checkout_lock_until`, `created_at` (logical) | owner email (pending), cleared on bind |
+| `accounts` | `hubspot_portal_id text unique`, `processing_state (onboarding\|active\|paused\|inactive\|revoked\|disconnected)` (derived, §6.1), `processing_state_changed_at`, `paused_at` (owner intent), `onboarding_completed_at`, `trial_started_at`, `trial_ends_at`, `timezone`, `timezone_source`, `logging_mode (unknown\|log_all\|sends_only\|none)`, `last_install_at` (logical; the orphan clock), `owner_user_id` (nullable), `pending_owner_email`, `pending_owner_expires_at` (+24 h), `pending_owner_auth_user_id`, `disconnected_at`, `purge_after`, `checkout_lock_until`, `created_at` (logical) | owner email (pending), cleared on bind |
 | `users` | `auth_user_id unique`, `account_id unique`, `email`; **unique `lower(email)`** | owner email |
 | `login_intents` | `token_hash_sha256 text pk` (sha256 of the Supabase hashed token), `purpose (login\|onboarding)`, `account_id`, `next`, `expires_at` (+1 h, the link's validity), `consumed_at`, `created_at` (logical) | none |
 | `settings` | `account_id pk`, `notify_emails text[]` (1–3), `notify_emails_verified text[]`, `mail_client (gmail\|outlook_work\|outlook_personal\|other)`, `gmail_account_email`, `quiet_start_hour`, `quiet_end_hour` (0–23; equal means none), `skip_weekends`, `followups_enabled`, `bcc_address`, `preferences_saved_at` | owner config |
-| `hubspot_connections` | `account_id unique`, `portal_id unique`, `hub_domain`, `ui_domain`, `data_hosting_location`, `account_type`, `scopes text[]`, `access_token_enc`, `refresh_token_enc` (format `v1.kid.iv.ct.tag`), `access_expires_at`, `token_version int`, `refresh_lease_id`, `refresh_lease_until`, `status (active\|revoked\|disconnected)`, `status_changed_at`, `status_reason`, `reconnect_email_sent_at`, `transient_failures`, `last_refresh_at`, `last_webhook_at`, `last_polled_at`, `poll_requested_at`, `journal_offset` | encrypted tokens |
+| `hubspot_connections` | `account_id unique`, `portal_id unique`, `hub_domain`, `ui_domain`, `data_hosting_location`, `account_type`, `scopes text[]`, `access_token_enc`, `refresh_token_enc` (format `v1.kid.iv.ct.tag`), `access_expires_at`, `token_version int`, `refresh_lease_id`, `refresh_lease_until`, `status (active\|revoked\|disconnected)`, `status_changed_at`, `status_reason`, `reconnect_email_sent_at`, `transient_failures`, `next_refresh_attempt_at`, `last_refresh_at`, `last_webhook_at`, `last_polled_at`, `poll_requested_at`, `journal_offset` | encrypted tokens |
 | `portal_history` | `hubspot_portal_id pk`, `first_trial_started_at` (tombstone, outside the cascade) | none |
 | `briefs` / `brief_versions` | brief JSON (business info), `source_url`, `booking_link_choice (unset\|link\|none)`, `booking_link_confirmed`, `version`, `source (generated\|owner)` | business info |
 | `brief_jobs` | `account_id`, `status (queued\|running\|done\|failed)`, `attempts`, `error_code`, `created_at` (logical; rate limit 5/day) | none |
@@ -193,8 +196,8 @@ The first migration is `supabase/migrations/20261001000001_init.sql`. Later mile
 | `scheduled_jobs` | `account_id`, `lead_id`, `kind (portal_poll\|lead_process\|followup\|weekly_report\|baseline\|brief_generate\|inbox_check\|privacy_delete\|account_daily)`, `seq`, `dedupe_key unique`, `payload jsonb` (ids only), `run_at`, `status (scheduled\|running\|done\|cancelled\|skipped\|failed)`, `external_id`, `published_at`, `hops int`, `attempts`, `attempt_id`, `lease_until`, `last_error_code`, `cancel_reason`, `created_at` (logical), `finished_at` | none |
 | `notifications_sent` | `dedupe_key unique`, `account_id`, `lead_id`, `kind`, `status (sending\|sent\|failed)`, `provider_message_id`, `recipients_count`, `reserved_at`, `sent_at` | none |
 | `weekly_reports` | `account_id`, `week_start date`, `timezone`, `period_start`, `period_end`, `metrics jsonb`, `status (pending\|sent\|failed)`, `attempts` (report runs); unique `(account_id, week_start)` | none |
-| `subscriptions` | `account_id`, `provider_subscription_id unique`, `plan_id`, `status` (Razorpay's 9 + `stale`), `short_url`, `start_at`, `expire_by`, `current_start`, `current_end`, `payment_failed_at`, `grace_until`, `cancel_at_cycle_end`, `last_synced_at`, `created_at` (logical); **partial unique** `(account_id) where status='created'` | none |
-| `billing_tombstones` | `provider_subscription_id pk`, `purged_at` | none |
+| `subscriptions` | `account_id`, `provider_subscription_id unique`, `plan_id`, `status` (Razorpay's 9 + `stale`), `status_changed_at`, `short_url`, `start_at`, `expire_by`, `current_start`, `current_end`, `payment_failed_at`, `grace_until`, `cancel_at_cycle_end`, `last_synced_at`, `created_at` (logical); **partial unique** `(account_id) where status='created'` | none |
+| `billing_tombstones` | `provider_subscription_id pk`, `last_status`, `purged_at`, `resolved_at` | none |
 | `webhook_events` | `provider`, `dedupe_key`, `body_sha256`, `portal_id`, `account_id`, `event_type`, `occurred_at`, `received_at` (audit), `outcome`; unique `(provider, dedupe_key)`; partial unique `(provider, body_sha256) where provider='razorpay'` | none |
 | `audit_log` | `account_id`, `at` (audit), `actor`, `action`, `level`, `meta jsonb` (allow-listed keys) | none |
 | `baselines` | `status (ok\|insufficient\|unavailable)`, `submissions_read`, `leads_counted`, `median_seconds_to_first_outbound`, `without_outbound_count`, `percent_available` | none |
@@ -239,12 +242,12 @@ The first migration is `supabase/migrations/20261001000001_init.sql`. Later mile
 5. `inactive`, if the account is not entitled (D-18);
 6. otherwise `active`.
 
-`applyProcessingState(accountId, $now)` loads the inputs, computes the state and applies it with a compare-and-set on the previous state. Only the caller that wins runs the side effects. **Every writer calls it:** Pause/Resume actions, the OAuth callback, the token manager, disconnect, billing webhooks and reconcile, onboarding completion, and the poll cron (for every non-purged account).
+`applyProcessingState(accountId, $now)` loads the inputs, computes the state and applies it with a compare-and-set on the previous state, **in one transaction with all of the transition's database side effects** (no network I/O inside, D-28). One-shot emails are reserved (`sending`) in that transaction and sent after commit; QStash cancels also run after commit. Only the caller that wins runs the side effects, and a lost send is resumed by the sweeper (§8.3). **Every writer calls it:** Pause/Resume actions, the OAuth callback, the token manager, disconnect, billing webhooks and reconcile, onboarding completion, and the poll cron (for every non-purged account).
 
 | Transition | Side effects (winner only) |
 |---|---|
 | → `active` | Move every `intake_floor_at` and `cursor_submitted_at` to `$now`; clear `purge_after` and `disconnected_at` |
-| `active` → `inactive` | One billing-inactive email, key `billing-inactive:{acct}:{changed_at}` |
+| → `inactive` (from any state) | One billing-inactive email, key `billing-inactive:{acct}:{entitlement_lost_at}` (trial end, the subscription's status change, or the end of grace), so pause → trial ends → resume still sends it, once |
 | → `revoked` / `disconnected` | `purge_after = $now + 30 d`; cancel jobs; revoke action tokens |
 | → `paused` | Cancel nothing; pending follow-ups fail their reservation predicate and are skipped |
 
@@ -331,17 +334,17 @@ dismiss POST → dismissed_at, jobs cancelled
 ### 7.4 Owner action links (no login, mobile-first, `no-store`, `noindex`, no browser Sentry)
 | Route | Auth | Behaviour |
 |---|---|---|
-| `GET /a/[token]/send[?via=mailto]` | token(send) + rl | Record the click (heuristic, D-26). Desktop Gmail/Outlook and URL ≤ 1,800 chars → **302**. Phone UA, "Other" or `via=mailto` → **200 interstitial** that opens `mailto:` on load and sends a nonce'd beacon, with a button and "Copy reply" fallback (D-13). Too long → copy page. Content purged → "This draft has expired" |
+| `GET /a/[token]/send[?via=mailto]` | token(send) + rl | Record the click (heuristic, D-26). Desktop Gmail/Outlook and URL ≤ 1,800 chars → **302**. Phone UA, "Other" or `via=mailto` → **200 interstitial** that opens `mailto:` on load and sends a nonce'd beacon, with a button and "Copy your reply" fallback (D-13). Too long → copy page. Content purged → "This draft has expired" |
 | `GET /a/[token]/copy` | token(send) + rl | Recipient, subject, body and BCC address, each with a copy button |
 | `GET /a/[token]/edit` | token(edit) + rl | Editable subject and body; lead message shown as "Message from the lead (unverified)" with links defanged |
-| `POST /a/[token]/edit` | token(edit) + origin + rl | Validate → record the click → **200** page with "Send from my email" (link), "Open in default mail app" and "Copy reply". The edited text is never stored |
+| `POST /a/[token]/edit` | token(edit) + origin + rl | Validate → record the click → **200** page with "Send from my email" (link), "Open in default mail app" and "Copy your reply". The edited text is never stored |
 | `GET /a/[token]/dismiss` → `POST` | token(dismiss) (+origin) + rl | Confirmation page → dismiss (single use) |
 | `GET /a/[token]/verify-notify` → `POST` | token(verify_notify) (+origin) + rl | Confirm an extra notify address (D-46) |
 
 ### 7.5 App (owner unless marked; `no-store`, `noindex`)
 | Route | Content |
 |---|---|
-| `/onboarding/email` (rl) | Needs the signed `pending_install` cookie (24 h); pre-filled with the installer's email; stores `pending_owner_email` and `pending_owner_expires_at` (+24 h), creates the auth user and sends the magic link with an `onboarding` login intent (D-35). The cookie is not needed afterwards: binding happens in `/auth/confirm`, in any browser |
+| `/onboarding/email` (rl) | Needs the signed `pending_install` cookie (24 h); pre-filled with the installer's email; stores `pending_owner_email` and `pending_owner_expires_at` (+24 h), creates the auth user (kept in `pending_owner_auth_user_id`; the previous one is deleted if the email changed) and sends the magic link with an `onboarding` login intent (D-35). The cookie is not needed afterwards: binding happens in `/auth/confirm`, in any browser |
 | `/onboarding/brief` | URL → `brief_generate` job (poll for status); the owner can continue to forms meanwhile. Brief form with booking-link confirm/none; `allow_pricing` defaults off. Saving creates a `brief_versions` row with `source='owner'` |
 | `/onboarding/forms` | `hubspot` + `flow` forms, newsletter-like forms unticked; ticking sets `intake_floor_at = $now` |
 | `/onboarding/preferences` | Mail client (4), notify emails (owner email pre-verified; extras need confirmation), quiet hours, skip weekends, detected timezone, optional BCC. Sets `preferences_saved_at`. No change alerts before onboarding is complete (D-46) |
@@ -412,7 +415,7 @@ Every dedupe key is prefixed with `{ENV_NAMESPACE}:`. Re-publishes append `:h{ho
    - permanent error → run the failure path inline, `failed`, return 489 + `Upstash-NonRetryable-Error`;
    - a live lease held by another attempt → 503 + `Retry-After`;
    - already `done`, `cancelled`, `skipped` or `failed` → 200.
-5. **Re-publish** (hop, quiet-hours re-target, long wait, sweeper, `inbox_check` cadence). A compare-and-set moves the row to `status='scheduled'`, sets the new `run_at`, `lease_until=NULL` and `hops=hops+1`, guarded by the current `hops` (before claim) or `attempt_id` (after claim). Then publish with dedupe id `{key}:h{hops}` and store the new `external_id`. A `deduplicated:true` response to a re-publish is an error.
+5. **Re-publish** (hop, quiet-hours re-target, long wait, sweeper). A compare-and-set moves the row to `status='scheduled'`, sets the new `run_at`, `lease_until=NULL` and `hops=hops+1`, guarded by the current `hops` (before claim) or `attempt_id` (after claim). Then publish with dedupe id `{key}:h{hops}` and store the new `external_id`. A `deduplicated:true` response to a re-publish is an error.
 6. **Failure callback** (`/api/jobs/failed`):
    ```sql
    UPDATE scheduled_jobs SET status='failed', finished_at=$now
@@ -426,16 +429,17 @@ Every dedupe key is prefixed with `{ENV_NAMESPACE}:`. Re-publishes append `:h{ho
    - `scheduled` with `run_at` more than 30 min in the past → re-publish;
    - `running` with an expired lease → re-publish;
    - `weekly_report` jobs that are `failed` while `weekly_reports.attempts < 3` and before local Tuesday 00:00 → `UPDATE scheduled_jobs SET status='scheduled', run_at=$now, lease_until=NULL, attempts=0, hops=hops+1 WHERE id=$1 AND status='failed' RETURNING` plus `weekly_reports.status='pending', attempts=attempts+1`, then publish. The due-check never re-enqueues;
-   - any row with `attempts ≥ 6` → the failure path instead of a re-publish.
+   - any row with `attempts ≥ 6` → the failure path instead of a re-publish;
+   - `notifications_sent` rows still `sending` 10 min after `reserved_at` → claimed by a compare-and-set on `reserved_at` and resumed (§8.4 step 2), re-rendered from the stored draft, lead message and template. If the kind's predicates no longer hold, the row becomes `failed` unsent. `magic_link` rows can't be re-rendered and become `failed`; the owner asks for a new link.
 8. **Cancel.** Mark the row `cancelled`, then `Scheduler.cancel(external_id)` by id. A 404 counts as success. There is never a bulk cancel.
 
 ### 8.4 Notification reservation (exactly-once owner emails)
 Every owner email goes through `reserveAndSend(kind, dedupeKey, …)`:
 
 1. **Reserve.** `INSERT INTO notifications_sent (dedupe_key, kind, status='sending', reserved_at=$now) SELECT … WHERE <predicates for this kind> ON CONFLICT (dedupe_key) DO NOTHING RETURNING id`.
-2. **No row returned.** Read the existing row. `sent` → done. `sending` with the **same kind** → resume (a retry after a crash). A different kind (e.g. a needs-touch meeting a new-lead reservation) → skip. No existing row → a predicate failed → skip, and the job ends `skipped`.
+2. **No row returned.** Read the existing row. `sent` → done: only `sent` blocks. `sending` → take it over: a compare-and-set on `(kind, reserved_at)` sets the caller's kind (new_lead↔needs_touch and follow_up↔needs_touch share keys) and `reserved_at=$now`, then continue at step 3. This covers a retry after a crash, a needs-touch replacing an unsent new-lead email, and the sweeper. `failed` → skip. No existing row → a predicate failed → skip, and the job ends `skipped`.
 3. **Tokens.** Mint `apt_` + base64url(32 random bytes) for each button. Insert only their sha256 hashes, with `notification_key`, and **commit before sending** (D-45). A resumed reservation mints fresh tokens and leaves earlier ones valid, because they may be in an email that already went out.
-4. **Send.** `Mailer.send` with `idempotencyKey = {ENV_NAMESPACE}:{dedupe_key}`. A Resend 409 `invalid_idempotent_request` on our own reserved key means the first attempt's email (with its committed tokens) already went out: mark it sent and revoke the just-minted tokens.
+4. **Send.** `Mailer.send` with `idempotencyKey = {ENV_NAMESPACE}:{dedupe_key}`. A Resend 409 `invalid_idempotent_request` on our own reserved key means an earlier attempt's email (with its committed tokens, possibly of the paired kind) already went out: mark it sent and revoke the just-minted tokens.
 5. **Commit.** In one transaction: `status='sent'` + the lead timestamp + (for the first notification) the follow-up job rows.
 
 **Keys and predicates by kind.** A needs-touch email shares the key of the email it replaces, so a lead gets at most one email per kind and stream.
@@ -444,11 +448,11 @@ Every owner email goes through `reserveAndSend(kind, dedupeKey, …)`:
 |---|---|---|
 | `new_lead`, `needs_touch` (initial) | `notify:{leadId}:initial:r{process_rev}` | lead not dismissed; `stop_reason` null; not `is_test`; account `active`; connection `active` |
 | `follow_up`, `needs_touch` (follow-up n) | `notify:{leadId}:fu{n}:s{followup_stream}` | the above, plus `replied_at` null, not superseded, `followups_enabled` |
-| `reply_detected` | `reply:{leadId}:s{followup_stream}` | `replied_at` not null; lead not dismissed; account and connection `active`. The caller must be the `markReplied` winner, and follow-ups must still have been scheduled (D-08) |
+| `reply_detected` | `reply:{leadId}:s{followup_stream}` | Reserved inside the `markReplied` transaction (§9.5), only when follow-ups were still scheduled (D-08): `replied_at` not null; lead not dismissed; account and connection `active` |
 | `inbox_test` | `inbox-test:{checkId}` | lead `is_test`; account `processing_state ∈ (onboarding, active)`; connection `active` |
 | `weekly_report` | `report:{acct}:{week_start}` | account and connection `active` |
-| `reconnect` | `reconnect:{conn}:{status_changed_at}` | the caller won the revoke compare-and-set |
-| `billing_inactive` | `billing-inactive:{acct}:{changed_at}` | the caller won the `active → inactive` compare-and-set |
+| `reconnect` | `reconnect:{conn}:{status_changed_at}` | reserved inside the revoke transaction (§9.1) |
+| `billing_inactive` | `billing-inactive:{acct}:{entitlement_lost_at}` | reserved inside the `→ inactive` transition (§6.1) |
 | `magic_link` | `magic:{intentId}` | — |
 | `verify_notify` | `verify-notify:{acct}:{addrHmac}` | the address is still listed and unverified |
 | `lead_cap` | `cap:{acct}:{localDate}` | account `active` |
@@ -477,25 +481,28 @@ Every owner email goes through `reserveAndSend(kind, dedupeKey, …)`:
 
 ### 9.1 Install, binding, tokens, reconnect, disconnect (D-10, D-11, D-22, D-35)
 1. **OAuth callback branches:**
-   - **(a) New portal:** create the account (trial from `portal_history` if present, otherwise now + 14 d) and the connection; issue the signed `pending_install` cookie (24 h, carrying the account id and the introspected installer email) → `/onboarding/email`.
-   - **(b) Existing, never bound** (`owner_user_id IS NULL`, not purged): store the fresh tokens, set the connection active, reset the `pending_owner_*` fields, keep the trial, issue a new `pending_install` → `/onboarding/email`.
+   - **(a) New portal:** create the account (`last_install_at=$now`; trial from `portal_history` if present, otherwise now + 14 d) and the connection; issue the signed `pending_install` cookie (24 h, carrying the account id and the introspected installer email) → `/onboarding/email`.
+   - **(b) Existing, never bound** (`owner_user_id IS NULL`, not purged): store the fresh tokens, set the connection active, set `last_install_at=$now` (restarting the orphan clock), reset the `pending_owner_*` fields, keep the trial, issue a new `pending_install` → `/onboarding/email`.
    - **(c) Existing, owned, with the owner's session:** reactivate: connection active; clear `purge_after`, `disconnected_at`, `status_reason` and `reconnect_email_sent_at`; then `applyProcessingState` (floors move forward).
    - **(d) Existing, owned, without the owner's session:** change nothing. If the installer email equals the owner's email, show "Sign in to finish reconnecting" and email a magic link (`next=/dashboard?reconnect=1`). Otherwise show "This HubSpot account is already connected to Autopilot by another user" and send the owner an `owner_alert`: "Someone in your HubSpot account tried to connect Autopilot. Nothing changed. If this was you, sign in and tap Reconnect."
-2. **Binding** (in `POST /auth/confirm`, any browser, after `verifyOtp`, for an `onboarding` intent):
+2. **Binding** (in `POST /auth/confirm`, any browser, after `verifyOtp`, for an `onboarding` intent), one statement:
    ```sql
-   UPDATE accounts SET owner_user_id=$u, pending_owner_email=NULL, pending_owner_expires_at=NULL
-   WHERE id=$intent.account_id AND owner_user_id IS NULL
-     AND lower(pending_owner_email)=$verifiedEmail AND pending_owner_expires_at > $now
-   RETURNING id
+   WITH b AS (
+     UPDATE accounts SET owner_user_id=$u, pending_owner_email=NULL,
+       pending_owner_expires_at=NULL, pending_owner_auth_user_id=NULL
+     WHERE id=$intent.account_id AND owner_user_id IS NULL
+       AND lower(pending_owner_email)=$verifiedEmail AND pending_owner_expires_at > $now
+     RETURNING id)
+   INSERT INTO users (auth_user_id, account_id, email) SELECT $u, b.id, $verifiedEmail FROM b
    ```
-   then insert `users`. No cookie or nonce is needed: a login-CSRF can't bind a stranger, because the verified email must equal the pending email. The email step refuses an address that already owns another account.
+   On a unique violation nothing is bound, and the page says "This email already owns an Autopilot account". No cookie or nonce is needed: a login-CSRF can't bind a stranger, because the verified email must equal the pending email. The email step also refuses an address that already owns another account.
 3. **Token manager** (`getAccessToken`):
    - If `access_expires_at − 5 min > $now`, use the stored token.
    - Otherwise take a refresh lease with a compare-and-set (`refresh_lease_until`, 20 s). The loser re-reads the row, polling every 250 ms for up to 10 s.
    - The winner makes **one** HTTP call (8 s timeout), with no transaction open.
    - Success: a conditional update that bumps `token_version` and always stores the newest refresh token.
-   - `revoked`: a compare-and-set on `status='active' AND token_version=$v` sets `revoked`, wipes tokens and calls `applyProcessingState` (→ `purge_after = +30 d`). The winner sends the reconnect email.
-   - `transient`: release the lease, throw `TransientError`, and let QStash back off.
+   - `revoked`: one transaction holds the compare-and-set on `status='active' AND token_version=$v` (sets `revoked`, wipes tokens), the `applyProcessingState` transition (`purge_after = +30 d`, jobs cancelled, tokens revoked) and the `reconnect` reservation. The email is sent after commit.
+   - `transient`: release the lease, increment `transient_failures`, throw `TransientError`. Jobs let QStash back off. The poll cron has no QStash backoff, so it skips the portal until `next_refresh_attempt_at = $now + 2^n × 5 min`; the fifth consecutive failure raises one Sentry alert; success resets the count (brief §5.1).
    - `config`: Sentry once; the connection stays active.
    - A 401 from an API call triggers one refresh.
 4. **`account_daily` job:**
@@ -509,18 +516,18 @@ Every owner email goes through `reserveAndSend(kind, dedupeKey, …)`:
    - Optionally cancel the Razorpay subscription (only from `authenticated`/`active`; otherwise the dialog explains why not).
    - Try the uninstall API, then revoke the token.
    - Then **always**: wipe tokens, set the connection `disconnected`, `applyProcessingState` (→ `purge_after`), cancel jobs, revoke action tokens.
-6. **Orphans:** an install with no bound owner 7 days after `accounts.created_at` → uninstall API, token wipe, immediate purge (D-48).
+6. **Orphans:** no bound owner, `last_install_at < $now − 7 d` and no unexpired pending owner → uninstall API, token wipe, delete the pending auth user, immediate purge (D-48).
 
 ### 9.2 Intake (D-07)
 `pollPortal(account, trigger)` runs under the per-account lease, for `active` accounts only. `trigger ∈ {webhook, cron}` is stored on new leads as `intake_trigger`.
 1. For each selected form:
    - Page through submissions newest first (limit 50) until a page has nothing newer than `cursor − 60 min`, or until 20 pages (Sentry warning at that cap). The 60-minute overlap lets a submission whose contact isn't visible yet be retried for an hour.
-   - Keep only submissions with `submittedAt > intake_floor_at`. **Skip** any whose `HMAC(lower(email))` equals an open inbox check's `test_address_hmac`.
+   - Keep only submissions with `submittedAt > intake_floor_at`. **Skip** any whose `HMAC(lower(email))` equals the `test_address_hmac` of an inbox check created in the last 24 h, open or closed. A skipped submission counts as processed for the cursor.
 2. For each new submission, in ascending order:
    - Resolve the contact with `GET contacts/{email}?idProperty=email&properties=firstname,lastname,company,message,email`. On a 404, skip it for now; later polls retry it while it is inside the overlap, after which an audit entry (no content) and a Sentry warning record it.
    - Fill missing fields from the contact.
    - Insert in **one transaction**: the lead (ON CONFLICT on both unique keys) → `lead_messages` (CTE on RETURNING) → the `lead_process` job.
-3. Set the cursor with `GREATEST(cursor, max processed submittedAt)`.
+3. Set the cursor with `GREATEST(cursor, max processed or skipped submittedAt)`.
 4. After commit, publish (the outbox, §8.3).
 
 ### 9.3 Process → draft → notify
@@ -536,7 +543,7 @@ Every owner email goes through `reserveAndSend(kind, dedupeKey, …)`:
    - Record `ai_calls` for each attempt.
 6. **Notify** (§8.4, kind `new_lead` or `needs_touch`):
    - Subject `New lead: {safe first name} — your reply is ready`, with a fallback (D-47).
-   - The email contains the "Don't reply to this email" line, the lead's name, company, email and quoted message (defanged), the draft, three buttons and the "Open in default mail app" link.
+   - The email contains the "This email isn't monitored" line (D-27), the lead's name, company, email and quoted message (defanged), the draft, three buttons and the "Open in default mail app" link.
    - Reply-To is the owner (D-27).
    - On commit: `first_notified_at`, `processing_state=notified`, and two `followup` job rows (unless follow-ups are off).
 
@@ -559,12 +566,12 @@ Every check returns an error **code** only, never text.
 | `echoes_lead` | D-47 |
 
 ### 9.5 Follow-up job (D-08, D-09, D-34, D-44)
-1. Hop check, then claim.
+1. Hop check, then claim. If this lead's `reply:{leadId}:s{followup_stream}` reservation is still `sending`, resume it (§8.4 step 2) and finish.
 2. Run `evaluateStops` on the database state (§6.2). If the current settings forbid "now", re-target.
 3. Read `GET contacts/{id}?properties=email,hs_additional_emails,hs_email_optout,hs_email_bad_address,hs_email_hard_bounce_reason_enum,hs_sales_email_last_replied&associations=emails`, paging the associations and batch-reading emails (metadata allow-list only) in chunks of 100. 404 → stop `contact_deleted`; a different `id` → re-map (merge); opted out or bounced → stop.
 4. Run `applySignals`:
-   - `send_confirmed_at` = earliest qualifying `EMAIL` to the lead (`LEAST`);
-   - a qualifying reply (from the lead's address, `hs_timestamp > GREATEST(first_notified_at, COALESCE(replies_ignored_before, '-infinity'))`) → `markReplied()` (`UPDATE … SET replied_at=… WHERE replied_at IS NULL RETURNING`). The winner cancels the remaining follow-ups and, because this job was still scheduled, sends `reply_detected` ("{Name} replied — follow-ups stopped"). Then done.
+   - `send_confirmed_at` = earliest qualifying `EMAIL` to the lead with `hs_timestamp ≥ first_notified_at − 60 s` (`LEAST`);
+   - a qualifying reply (from the lead's address, `hs_timestamp > GREATEST(first_notified_at, COALESCE(replies_ignored_before, '-infinity'))`) → `markReplied()`: **one transaction** that sets `replied_at` (`WHERE replied_at IS NULL AND NOT is_test RETURNING`), marks the remaining follow-up jobs `cancelled` and inserts the `reply_detected` reservation (`sending`; this job was still scheduled). After commit: QStash cancels, then the email ("{Name} replied — follow-ups stopped", §8.4 steps 3–5). A crash or transient error before the send is recovered by step 1 on redelivery, or by the sweeper. Then done.
 5. If not stopped:
    - draft the follow-up (≤70 words, referencing the original subject/body while that content still exists);
    - validator, retry and needs-touch as for initial drafts;
@@ -585,13 +592,13 @@ Every check returns an error **code** only, never text.
 - **Brief generation (`brief_generate` job, `brief_jobs.attempts` counts deliveries):**
   - **Crawl:** the homepage plus up to 8 same-site internal links, ranked by keywords in the path or link text (`services|pricing|about|contact|faq`). `robots.txt` is honoured. Each page gets a 10 s `AbortSignal`, inside a 60 s total budget, with at most 4 fetches at once (SSRF guard, §10.4).
   - **Extraction:** strip `nav`, `header`, `footer`, `script`, `style`, `noscript`, `svg`, `iframe` and hidden DOM (`display:none`, `hidden`, `aria-hidden`, `template`, comments) before extracting text.
-  - **LLM:** Sonnet 5.5, adaptive thinking, `ANTHROPIC_BRIEF_EFFORT`, 16000 max tokens, per call `{timeout: remainingMs, signal: AbortSignal.timeout(remainingMs)}`. A second attempt (`attempts ≥ 1`, or the previous attempt aborted) uses `between_tools`/`high`/4096. After the final delivery the job is `failed` and the owner gets the empty editable form, as on a refusal.
+  - **LLM:** Sonnet 5.5, adaptive thinking, `ANTHROPIC_BRIEF_EFFORT`, 16000 max tokens, per call `{timeout: remainingMs, signal: AbortSignal.timeout(remainingMs)}`. The first delivery uses those parameters; any later delivery (`brief_jobs.attempts`, read before this delivery increments it, is ≥ 1, or the previous attempt aborted) uses `between_tools`/`high`/4096. After the final delivery the job is `failed` and the owner gets the empty editable form, as on a refusal.
   - **Post-processing:** `faqs` capped at 8; `allow_pricing=false`; `booking_link` must be https and appear in the fetched pages, and the editor shows its host and asks the owner to confirm it.
 - **Inbox check:**
   - **History:** two `emails/search` counts (outbound vs inbound, last 30 days).
   - **Live test:**
-    1. The owner enters their other address. `GET contacts/{testEmail}?idProperty=email`; on a 404 with no BCC saved, ask the owner to add their BCC address or submit one of their own forms with the test address.
-    2. Create the check (`test_address_hmac`, deadlines) and a test lead (`is_test`, `intake_trigger=inbox_check`, template draft, content purged after 24 h). Send the three-button `inbox_test` email to the owner, and insert the first `inbox_check` job.
+    1. The owner enters their other address. The check row (`test_address_hmac`, `status='open'`) is created **at once**, so intake skips that address from then on (§9.2). Then `GET contacts/{testEmail}?idProperty=email`; on a 404 with no BCC saved, ask the owner to add their BCC address or submit one of their own forms with the test address.
+    2. Create a test lead (`is_test`, `intake_trigger=inbox_check`, template draft, content purged after 24 h), set the deadlines, send the three-button `inbox_test` email to the owner, and insert the first `inbox_check` job.
     3. **Send leg:** the owner taps "Send from my email" and sends from their own mailbox; we look for an `EMAIL` to the test address within 10 min.
     4. **Reply leg:** the owner replies from the test address; we look for an `INCOMING_EMAIL` from it within 10 min.
     5. Each `inbox_check` run reads HubSpot, writes only `inbox_checks` and `logging_mode`, and inserts the next run (+60 s) until both legs resolve or time out. It never calls `markReplied`.
@@ -600,7 +607,7 @@ Every check returns an error **code** only, never text.
 - **Baseline (job):**
   - Read the last 30 days of submissions on the selected forms. Above 500 → "Not enough data". Classify each with the fast model **in memory** (nothing stored); keep `lead`/`unclear`.
   - For each kept submission, read the contact's associated emails and take the first `EMAIL` sent **to** the lead after `submittedAt`.
-  - Report the lead count; the median (n ≥ 3; even n = mean of the two middle values); and the % with no logged outbound email (only if the portal has any logged `EMAIL` in 30 days and the email scope is granted). Otherwise "Not enough logged history".
+  - Report the lead count; the median (n ≥ 3; even n = mean of the two middle values); and the number of leads with no logged outbound email, with that as a % of the lead count (only if the portal has any logged `EMAIL` in 30 days and the email scope is granted). Otherwise "Not enough logged history".
 
 ### 9.8 Monday report (D-17, D-37)
 1. Claim the job.
@@ -626,7 +633,7 @@ Every check returns an error **code** only, never text.
   1. Take the lock (`checkout_lock_until`, 30 s compare-and-set).
   2. Guard: block on `authenticated`, `active`, `pending`, `halted`, `paused`.
   3. Reuse a `created` row's `short_url` while `expire_by > now` and (`start_at` is null or `> now`).
-  4. Otherwise re-fetch each non-reusable `created` row from Razorpay and apply its real status; if the fetch fails, mark it `stale` locally.
+  4. Otherwise re-fetch each non-reusable `created` row from Razorpay and apply a status other than `created`. If Razorpay still says `created` (it documents no expiry at `expire_by`), or the fetch fails, mark the row `stale` locally. Past `expire_by` the customer can no longer authorise it, and the second-live-subscription rule covers anything unexpected.
   5. Create (`start_at` if more than 1 day of trial is left; `expire_by` rule), insert, 303 to `short_url`.
 - **Webhook and reconcile:** fetch-and-apply, applied only when newer, then `applyProcessingState`.
 - **Second live subscription** for the same account: cancel the newer one immediately and alert the admin.
@@ -640,8 +647,8 @@ Every query binds `$now`. The DB-local steps also run from the 5-minute cron thr
 4. Clear `inbox_checks.test_address` after 24 h; expire `login_intents`.
 5. **Account purge** (`account_daily`), when `purge_after < $now` (or an orphan at 7 days) **and** no connection is active, re-checked right before the auth-user delete:
    - a live `authenticated`/`active` subscription is cancelled first (`cancel_at_cycle_end: false`);
-   - a `paused`, `pending` or `halted` subscription **skips** the purge and alerts the admin;
-   - write the tombstones (`portal_history`, `billing_tombstones`);
+   - a `paused`, `pending` or `halted` subscription can't be cancelled through the API: the purge still runs, and the admin is alerted to cancel it in the Razorpay dashboard;
+   - write the tombstones (`portal_history`; `billing_tombstones` with each subscription's id and last status). A tombstoned subscription later seen `authenticated` or `active` (webhook or daily reconcile) is cancelled at once, and the admin is alerted to refund any charge;
    - delete the Supabase auth user;
    - `delete from accounts`.
 6. Prune `webhook_events` older than 30 d, expired tokens, `rate_limits`, and `ai_calls` older than 13 months.
@@ -662,8 +669,8 @@ Every query binds `$now`. The DB-local steps also run from the 5-minute cron thr
    - All cookies are HMAC-signed, `httpOnly`, `Secure`, `SameSite=Lax`.
 3. **Auth (D-22, D-35):**
    - token in the URL fragment; `type=email`;
-   - server-side login intents; `next` allow-list;
-   - binding in the `/auth/confirm` POST by verified email = pending email, in any browser;
+   - server-side login intents; `next` parsed with `new URL(next, APP_URL)`: same origin, pathname allow-list, query kept;
+   - binding in the `/auth/confirm` POST, as one statement, by verified email = pending email, in any browser;
    - same-origin checks; latency floor on `/login`; rate limits on `/login`, `/onboarding/email` and `POST /auth/confirm`;
    - public Supabase sign-ups off.
 4. **SSRF guard:**
@@ -733,24 +740,24 @@ Every query binds `$now`. The DB-local steps also run from the 5-minute cron thr
 |---|---|
 | Validator golden cases | `domain/validator.test.ts` (≥40, including injection payloads) |
 | Signatures with known vectors | `security/hubspot-signature.test.ts` (5 vectors + negatives incl. the 300000/300001 boundary), `razorpay-signature.test.ts` (A–C + negatives), `qstash-signature.test.ts` (`jose`-signed tokens, fake timers, dev-key rejection) |
-| Token refresh: revoked vs transient | `services/token-manager.test.ts` with exact HubSpot error fixtures (`invalid_grant`/`BAD_REFRESH_TOKEN`, `BAD_HUB`, `invalid_client`, 429 `TEN_SECONDLY_ROLLING`/`DAILY`, 477 + `Retry-After`, 502, timeout), lease loser, version compare-and-set |
+| Token refresh: revoked vs transient | `services/token-manager.test.ts` with exact HubSpot error fixtures (`invalid_grant`/`BAD_REFRESH_TOKEN`, `BAD_HUB`, `invalid_client`, 429 `TEN_SECONDLY_ROLLING`/`DAILY`, 477 + `Retry-After`, 502, timeout), lease loser, version compare-and-set, the poll cron's backoff and fifth-failure alert |
 | Follow-up stop rules | `domain/stops.test.ts` + `services/followups.test.ts` (including stops arriving between claim and send) |
 | Quiet hours across timezones | `domain/quiet-hours.test.ts` (§8.5) |
-| Checkout guard | `domain/checkout-guard.test.ts` + `entitlement.test.ts` + checkout lock, stale-`created` and second-subscription tests |
-| Retention purge | `services/retention.test.ts` (30 d + 1 h, revoked-then-reconnected not purged, orphan at 7 d, live subscription cancelled first, `paused`/`pending`/`halted` skip, test lead at 24 h) |
+| Checkout guard | `domain/checkout-guard.test.ts` + `entitlement.test.ts` + checkout lock, stale-`created` (abandoned on trial day 2, still `created` on day 10 → `stale` → new checkout) and second-subscription tests |
+| Retention purge | `services/retention.test.ts` (30 d + 1 h, revoked-then-reconnected not purged, orphan 7 d after the last install (a branch-(b) reinstall on day 6 is not purged on day 7), live subscription cancelled first, `paused`/`pending`/`halted` purged with a tombstone and an admin alert, a tombstoned subscription turning `active` is cancelled, test lead at 24 h) |
 | Idempotent webhook replay | `http/hubspot-webhook.test.ts` (same body twice; `attemptNumber` 0/1; webhook + poller → one lead; `appId` mismatch) + Razorpay replays (same id; missing header → body hash; old `created_at`) |
 
 **Further tests:**
 - **Migrations and data:** migrations/RLS/grants/functions (over `supabase/migrations` tables only); driver normaliser; no `now()` in SQL; DB-error sanitising.
 - **Jobs:** claim/crash/redelivery/sweeper per kind; re-publish with `:h{hops}` (and `deduplicated:true` → error); a duplicate delivery during a live lease that exhausts its retries → the failure callback loses, exactly one owner email; a failed weekly report re-enqueued by the sweeper and sent once; `attempts ≥ 6` → failure path.
-- **Notifications:** reservation per kind, including the happy path for `reply_detected` (after `markReplied`) and `inbox_test` (during onboarding); crash after send → no duplicate (the 409 path); dismiss during drafting → no send; needs-touch never resumes a new-lead reservation.
-- **Processing state:** every transition; pause → revoke → reconnect stays `paused`; resume moves the floors at once; the onboarding gate (brief job still running → Finish disabled, account stays `onboarding`).
-- **Auth and onboarding:** callback branches (a)–(d), including an unbound reinstall reaching `/onboarding/email` with a new cookie and an owner-email reinstall without a session getting a magic link and no alert; cross-device bind (email step in cookie jar A, confirm in an empty jar B → owner bound); link confirmed at minute 45 → bind succeeds; login-CSRF with another email → no bind; magic-link `type` and `next` handling; proxy refresh cookie propagation.
-- **Intake:** contact visible 30 min after the submission still becomes a lead; the test address is skipped while a check is open; historical submissions below the floor are never ingested; contact-filled values are purged with the rest.
+- **Notifications:** reservation per kind, including the happy path for `reply_detected` (after `markReplied`) and `inbox_test` (during onboarding); crash after send → no duplicate (the 409 path); dismiss during drafting → no send; needs-touch takes over an unsent new-lead reservation (exactly one email); a `sending` reservation older than 10 min is resumed by the sweeper; `markReplied` followed by a transient Resend error → exactly one `reply_detected` on retry.
+- **Processing state:** every transition; pause → revoke → reconnect stays `paused`; resume moves the floors at once; pause → trial ends → resume → exactly one billing-inactive email; a crash after a revoke commits still delivers the reconnect email (sweeper); the onboarding gate (brief job still running → Finish disabled, account stays `onboarding`).
+- **Auth and onboarding:** callback branches (a)–(d), including an unbound reinstall reaching `/onboarding/email` with a new cookie and an owner-email reinstall without a session getting a magic link and no alert; cross-device bind (email step in cookie jar A, confirm in an empty jar B → owner bound); link confirmed at minute 45 → bind succeeds; login-CSRF with another email → no bind; two pending installs with the same email → the second bind is refused and that account stays unbound; `next=/dashboard?reconnect=1` survives the allow-list; magic-link `type` and `next` handling; proxy refresh cookie propagation.
+- **Intake:** contact visible 30 min after the submission still becomes a lead; the test address is skipped for 24 h from the check's creation, on an active account too, and is not ingested after the check closes; `privacy_delete` removes content, revokes tokens, cancels jobs and sets `stop_reason='privacy_deletion'`; historical submissions below the floor are never ingested; contact-filled values are purged with the rest.
 - **Signals:** to-address rule, from-address rule, `replies_ignored_before`; out-of-office reply → Resume follow-ups → follow-up sent → real reply → `reply_detected` once and the remaining job cancelled; test leads excluded from every refresh.
 - **HubSpot client:** request allow-list; email metadata allow-list; `REQUIRED_SCOPES` vs `app-hsmeta.json`; forms list query string; associations paging/chunking.
-- **Domain:** compose vectors (TV1–TV3, lone surrogate, IDN, `+`, `&`, CRLF); newsletter detection; due-check (Kolkata, Kathmandu); weekly metrics and honesty by logging mode; the copy rule (every owner-side "reply" is prefixed by you/your); `deriveLeadStatus`.
-- **AI:** `toClaudeJsonSchema` snapshots; `buildModelParams` per model; brief fallback (slow first attempt → second attempt uses `between_tools`/4096); AI error classification.
+- **Domain:** compose vectors (TV1–TV3, lone surrogate, IDN, `+`, `&`, CRLF); newsletter detection; due-check (Kolkata, Kathmandu); weekly metrics and honesty by logging mode; the copy rule (every owner-side "reply"/"replied" is qualified by you, your or from you); `deriveLeadStatus`.
+- **AI:** `toClaudeJsonSchema` snapshots; `buildModelParams` per model; brief parameters (the first delivery uses adaptive/`ANTHROPIC_BRIEF_EFFORT`/16000; after a slow first attempt the second uses `between_tools`/4096); AI error classification.
 - **Brief builder:** page selection and ranking, per-page timeout, nav/script/hidden-DOM stripping, on `test/fixtures/site`.
 - **Security:** SSRF (rebinding resolver, IPv6 forms, redirects); robots parser; CSP builder (dev and prod); proxy scope; cross-tenant isolation; env refusals; crypto (kid, rotation, tamper); rate limits on every public action and auth route.
 - **Observability:** scrubber, envelope, logger.
@@ -900,7 +907,7 @@ Every milestone ends with:
 7. A 5-line summary
 
 ### M1: scaffold, CI, migrations, PGlite harness, fakes, CLAUDE.md
-- [ ] Next 16 app (`src/` layout) with `global-error.tsx` and **placeholder `/` and `/login` pages**; TypeScript strict; Tailwind 4; ESLint 9 with boundary, time-API and `URLSearchParams`-in-compose rules; Vitest with the `server-only` stub; `tsconfig.scripts.json`; `.gitignore` (`.env*`, `!.env.example`, `.data/`, `outbox/`, `.next/`, `coverage/`); `.nvmrc`
+- [ ] Next 16 app (`src/` layout) with `global-error.tsx`, **placeholder `/` and `/login` pages** and `GET /api/health` (`{ok, mode}`); TypeScript strict; Tailwind 4; ESLint 9 with boundary, time-API and `URLSearchParams`-in-compose rules; Vitest with the `server-only` stub; `tsconfig.scripts.json`; `.gitignore` (`.env*`, `!.env.example`, `.data/`, `outbox/`, `.next/`, `coverage/`); `.nvmrc`
 - [ ] Scripts `dev`, `build`, `start`, `typecheck`, `lint`, `test`, `simulate`; `.github/workflows/ci.yml` (all gates, Node 22, plus the client-bundle secret grep)
 - [ ] `env.ts` with fake/live rules, documented defaults and refusals; `.env.example` (complete); `next.config.ts` deriving `NEXT_PUBLIC_PRODUCT_NAME`
 - [ ] `supabase/migrations/20261001000001_init.sql` (every table in §5: RLS, grants, default-privilege revoke, indexes); `supabase/config.toml`; `fake-shim.sql` (roles, `auth` stub, `fake` schema); `migrate.ts` with the `fake._migrations` ledger; the migration test
@@ -916,7 +923,7 @@ Every milestone ends with:
 - [ ] `/api/hubspot/install`, the callback (branches a–d), `pending_install`, `portal_history`
 - [ ] Token manager (lease, compare-and-set, revoke path, transient path, 401 rule) + `renderEmail` + the ReconnectHubSpot template + Mailer (live Resend: Reply-To, idempotency, 409 handling, transient mapping) + `reserveAndSend` with the per-kind predicate table (§8.4)
 - [ ] Jobs core: outbox publish, hop, claim/lease, re-publish with `hops`, sweeper, `/api/jobs/run`, `/api/jobs/failed` (compare-and-set), QStash scheduler adapter (retries 4, backoff header) + signature tests
-- [ ] Webhook route (dedupe, `appId`, debounced double poll, privacy deletion → `privacy_delete` job)
+- [ ] Webhook route (dedupe, `appId`, debounced double poll, privacy deletion → `privacy_delete` job) and the `privacy_delete` handler (D-06) + test
 - [ ] Poll cron (global lease, `applyProcessingState`, `pollPortal` with per-account lease, floors, 60-minute overlap, test-address skip, cursors with `GREATEST`, transactional inserts, `intake_trigger`) + cron auth
 - [ ] Classification (Haiku params, `toClaudeJsonSchema`, lowercase enums, failure → `unclear`, `ai_calls`) + live `AnthropicLLM`; FakeLLM parameter assertion
 - [ ] Simulation seed helper that creates an active account directly (forms selected, floors, `onboarding_completed_at`); M3 replaces it with the real onboarding
@@ -925,7 +932,7 @@ Every milestone ends with:
 ### M3: brief builder, onboarding, inbox check, baseline
 - [ ] `HttpWebFetcher` with the SSRF guard, robots parser, page selection and ranking, per-page timeout, parallel crawl, nav/script/hidden-DOM stripping (tests on `test/fixtures/site`); `brief_generate` job with the LLM timeout and fallback; brief editor and versions; booking-link rules
 - [ ] Auth: `AuthProvider` (Supabase admin `createUser`/`generateLink` + own mailer; `refreshSession`; fake), `login_intents`, `/login` (latency floor, limits), `/auth/confirm` (fragment, POST, `type`, intent, bind, `next`, rate limit), `/onboarding/email`, admin login, `requireOwner`/`OwnerScope`, `src/proxy.ts` (scope, CSP builder dev/prod, refresh + tests), the MagicLink template
-- [ ] Action tokens (random, hashed, purpose, expiry, revocation, committed before send); compose builders + golden vectors; `/a/[token]/send` (click heuristic, 302 / interstitial / copy) and `/a/[token]/copy`; InboxTest template
+- [ ] Action tokens (random, hashed, purpose, expiry, revocation, committed before send); compose builders + golden vectors; `/a/[token]/send` (click heuristic, 302 / interstitial / copy), `/a/[token]/copy` and `/a/[token]/verify-notify`; InboxTest and VerifyNotify templates
 - [ ] Onboarding pages (forms with newsletter detection and floors; preferences with notify verification; change alerts only after onboarding)
 - [ ] Inbox check (history, test contact handling, `inbox_check` job and its 60-second cadence, two legs, continue or skip, `logging_mode`, fix-step copy, `is_test` exclusions)
 - [ ] Baseline job (in-memory classification, cap 500, sufficiency rules); the onboarding-complete gate → `active`
@@ -935,8 +942,8 @@ Every milestone ends with:
 - [ ] Draft and follow-up prompts (untrusted delimiters); validator with ≥40 golden cases; retry; needs-touch template and fallback (fatal, final delivery, failure callback); daily cap after classification + deferred + `lead_cap` email; AI budget breaker
 - [ ] `lead_process` end to end with reservation, random tokens, safe subject, defanged message, the secondary mailto link, Reply-To = owner
 - [ ] Templates: NewLead, NeedsTouch, FollowUp, ReplyDetected (WeeklyReport stub, BillingInactive stub)
-- [ ] `/a/[token]/edit` (200 result page) and `/a/[token]/dismiss` (confirm + POST); `/a/[token]/verify-notify`
-- [ ] `shiftToAllowed` + timezone tests; follow-up job rows created in the "notified" transaction
+- [ ] `/a/[token]/edit` (200 result page) and `/a/[token]/dismiss` (confirm + POST)
+- [ ] `shiftToAllowed` + timezone tests; follow-up job rows created in the "notified" transaction; `deriveLeadStatus` (D-32) + table tests
 - [ ] Simulation stage 4: `new_lead` ×4 at Day 0; all three action links work; clicks recorded
 
 ### M5: follow-up scheduler, reply detection, stop rules
