@@ -1,12 +1,13 @@
 import 'server-only';
 import { errorCode } from '@/server/domain/errors';
 import { followUpTargets, type FollowUpNumber, type FollowUpTarget } from '@/server/domain/followup-schedule';
-import type { QuietHoursSettings } from '@/server/domain/quiet-hours';
+import { STREAM_ENDED_STOP } from '@/server/domain/stops';
 import type { Db } from '@/server/db';
 import { insertJob } from '@/server/jobs/outbox';
 import { raiseAlert } from '@/server/jobs/alert';
 import type { JobRow } from '@/server/jobs/types';
 import { log } from '@/server/obs/log';
+import { inPortalZone, quietHoursOf, type QuietHoursColumns } from './settings';
 
 // The two follow-up job rows of the "notified" transaction (brief §5.6, PLAN §8.2, §8.5, §9.3 step 6,
 // D-14, D-33). Called inside the transaction that marks the lead's first email sent, with
@@ -27,7 +28,7 @@ export type FollowUpScheduleResult =
   | { readonly type: 'followups_off' }
   | { readonly type: 'stopped' }
   | { readonly type: 'lead_missing' }
-  /** The targets could not be computed (the admin was alerted); no rows. */
+  /** The targets could not be computed (the admin was alerted); no rows, and the stream's end stored (max_followups). */
   | { readonly type: 'unschedulable' };
 
 /** PLAN §8.2's key (without the env prefix) for follow-up `n` of the lead's `followupStream`. */
@@ -44,30 +45,13 @@ export interface ScheduleFollowUpsInput {
   readonly now: Date;
 }
 
-interface ScheduleRow {
+interface ScheduleRow extends QuietHoursColumns {
   is_test: boolean;
   followup_stream: number;
   stop_reason: string | null;
   dismissed_at: Date | null;
   timezone: string | null;
   followups_enabled: boolean | null;
-  quiet_start_hour: number | null;
-  quiet_end_hour: number | null;
-  skip_weekends: boolean | null;
-}
-
-// The settings defaults (D-33) for an account without a settings row (should not happen once active).
-const DEFAULT_QUIET_HOURS: QuietHoursSettings = { quietStartHour: 19, quietEndHour: 8, skipWeekends: true };
-
-function targetsFor(input: ScheduleFollowUpsInput, settings: QuietHoursSettings, timezone: string | null): readonly FollowUpTarget[] {
-  try {
-    return followUpTargets(input.firstNotifiedAt, settings, timezone ?? 'UTC', input.accountId);
-  } catch (error) {
-    // An unusable stored zone: the portal's local time is unknown, so UTC (as the daily cap does).
-    if (timezone === null || errorCode(error) !== 'quiet_hours_invalid_time') throw error;
-    log.warn('account timezone unusable for follow-ups: using UTC', { event: 'followup.zone_fallback', accountId: input.accountId });
-    return followUpTargets(input.firstNotifiedAt, settings, 'UTC', input.accountId);
-  }
 }
 
 /**
@@ -96,15 +80,19 @@ export async function scheduleFollowUpsInTx(tx: Db, input: ScheduleFollowUpsInpu
     return { type: 'followups_off' };
   }
 
-  const settings: QuietHoursSettings =
-    row.quiet_start_hour === null || row.quiet_end_hour === null || row.skip_weekends === null
-      ? DEFAULT_QUIET_HOURS
-      : { quietStartHour: row.quiet_start_hour, quietEndHour: row.quiet_end_hour, skipWeekends: row.skip_weekends };
-
+  const settings = quietHoursOf(row);
   let targets: readonly FollowUpTarget[];
   try {
-    targets = targetsFor(input, settings, row.timezone);
+    targets = inPortalZone(row.timezone, input.accountId, (zone) => followUpTargets(input.firstNotifiedAt, settings, zone, input.accountId));
   } catch (error) {
+    // No follow-up will come: the stream's end is recorded now (as a job that ends without its email
+    // does, D-70), so the lead can still read "No reply from lead" instead of "follow-ups pending"
+    // forever (D-73). Inside the "notified" transaction, which still commits.
+    await tx.query(`update leads set stop_reason = $3 where id = $1 and account_id = $2 and stop_reason is null and not is_test`, [
+      input.leadId,
+      input.accountId,
+      STREAM_ENDED_STOP,
+    ]);
     raiseAlert('followup_schedule_failed', { accountId: input.accountId, leadId: input.leadId, errorCode: errorCode(error) });
     return { type: 'unschedulable' };
   }

@@ -101,6 +101,11 @@ export interface ReserveAndSendInput extends NotificationSendPlan {
   dedupeKey: string;
   accountId: string | null;
   leadId?: string | null | undefined;
+  /**
+   * The caller's ownership check (a job's `ctx.assertOwned`): the reservation, or the takeover of an
+   * earlier attempt's, runs in one transaction after it, so a job cancelled meanwhile never reserves.
+   */
+  guard?: ((tx: Db) => Promise<void>) | undefined;
 }
 
 export type NotificationSkipReason =

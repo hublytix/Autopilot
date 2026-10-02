@@ -70,3 +70,56 @@ export function recordStatements(db: Db): { db: Db; statements: string[] } {
   });
   return { db: wrap(db), statements };
 }
+
+/** A Db that knows whether a statement is running inside one of its transactions. */
+export function trackTransactions(db: Db): { db: Db; depth: () => number } {
+  let depth = 0;
+  const wrap = (handle: Db): Db => ({
+    query: (sql, params) => handle.query(sql, params),
+    one: (sql, params) => handle.one(sql, params),
+    maybeOne: (sql, params) => handle.maybeOne(sql, params),
+    exec: (sql: string) => handle.exec(sql),
+    tx<T>(fn: (tx: Db) => Promise<T>): Promise<T> {
+      return handle.tx(async (inner) => {
+        depth += 1;
+        try {
+          return await fn(wrap(inner));
+        } finally {
+          depth -= 1;
+        }
+      });
+    },
+    close: () => handle.close(),
+  });
+  return { db: wrap(db), depth: () => depth };
+}
+
+/** The ports that reach the network (CLAUDE.md: no transaction is held across network I/O). */
+const NETWORK_PORTS = ['hubspot', 'llm', 'mailer', 'scheduler', 'billing', 'webFetcher', 'auth'] as const;
+
+/**
+ * `deps` whose network ports throw when called while one of its database transactions is open, so a
+ * QStash cancel, an email or a HubSpot read moved inside a transaction fails the test. `calls` lists
+ * the port calls made outside transactions (`scheduler.cancel`, …).
+ */
+export function forbidNetworkInTransactions<D extends { db: Db } & Record<(typeof NETWORK_PORTS)[number], object>>(deps: D): { deps: D; calls: string[] } {
+  const tracked = trackTransactions(deps.db);
+  const calls: string[] = [];
+  const guarded = { ...deps, db: tracked.db } as D;
+  for (const port of NETWORK_PORTS) {
+    const target = deps[port];
+    (guarded as Record<string, unknown>)[port] = new Proxy(target, {
+      get(object, property, receiver) {
+        const value: unknown = Reflect.get(object, property, receiver);
+        if (typeof value !== 'function') return value;
+        return (...args: unknown[]) => {
+          const name = `${port}.${String(property)}`;
+          if (tracked.depth() > 0) throw new Error(`network call inside a database transaction: ${name}`);
+          calls.push(name);
+          return (value as (...a: unknown[]) => unknown).apply(object, args);
+        };
+      },
+    });
+  }
+  return { deps: guarded, calls };
+}

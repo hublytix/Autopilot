@@ -193,7 +193,6 @@ describe('ReplyDetected', () => {
         firstName: 'Maya',
         repliedAtText: formatReplyTime(new Date('2026-10-08T15:20:00.000Z'), 'America/New_York'),
         hubspotRecordUrl: recordUrl,
-        dashboardUrl: 'http://localhost:3000/dashboard',
       }),
     );
     expect(replyDetectedSubject('Maya')).toBe('Maya replied — follow-ups stopped');
@@ -202,12 +201,22 @@ describe('ReplyDetected', () => {
     expect(text).toContain('HubSpot logged a reply from Maya on Thu 8 Oct, 11:20.');
     expect(html).toContain(`href="${recordUrl}"`);
     expect(actionLinks(html)).toEqual([]);
+    // No page offers "Resume follow-ups" before M6: the email does not promise it (law 5, D-73).
+    expect(text).not.toMatch(/resume follow-ups|dashboard/i);
+  });
+
+  it('offers "resume follow-ups" only with a page that has it', async () => {
+    const { text, html } = await renderEmail(
+      createElement(ReplyDetected, { productName: 'P', firstName: 'Maya', repliedAtText: null, hubspotRecordUrl: null, resumeFollowUpsUrl: 'http://localhost:3000/leads/1' }),
+    );
+    expect(text).toContain('If it was an automatic reply, such as an out-of-office message, you can resume follow-ups');
+    expect(html).toContain('href="http://localhost:3000/leads/1"');
   });
 
   it('works without a name, a time or a usable record', async () => {
     expect(replyDetectedSubject(null)).toBe('Your lead replied — follow-ups stopped');
     const { text } = await renderEmail(
-      createElement(ReplyDetected, { productName: 'P', firstName: null, repliedAtText: null, hubspotRecordUrl: null, dashboardUrl: 'http://localhost:3000/dashboard' }),
+      createElement(ReplyDetected, { productName: 'P', firstName: null, repliedAtText: null, hubspotRecordUrl: null }),
     );
     expect(text).toContain('HubSpot logged a reply from your lead.');
     expect(text).not.toContain('Open the contact in HubSpot');

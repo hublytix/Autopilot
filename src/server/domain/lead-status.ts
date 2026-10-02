@@ -14,8 +14,11 @@ import {
 //   2. replied         replied_at is set (the lead's reply, confirmed in HubSpot: law 3, D-37)
 //   3. filtered        a filtered class, not overridden ("This is a real lead", D-42)
 //   4. not_processed   processing_state is failed, skipped or deferred
-//   5. no_reply        follow-ups finished or off, and at least 2 days since the last email to the
-//                      owner about this lead
+//   5. no_reply        follow-ups finished or off, at least 2 days since the last email to the owner
+//                      about this lead, and HubSpot was read in full (every logged email) after the
+//                      owner email before that one: the check that let the last email go out, or a
+//                      later one. Without such a check nobody looked, so the claim "none logged" is not
+//                      made ("not enough data", law 3, D-73) and the lead keeps its send status.
 //   6. send_confirmed  send_confirmed_at is set (an EMAIL logged in HubSpot)
 //   7. send_clicked    first_send_clicked_at is set (a click is never a confirmed send: law 3, D-26)
 //   8. drafted         the owner was emailed the draft (processing_state notified)
@@ -35,6 +38,8 @@ export interface LeadStatusInput {
   readonly fu2NotifiedAt: Date | null;
   readonly firstSendClickedAt: Date | null;
   readonly sendConfirmedAt: Date | null;
+  /** `leads.signals_checked_at`: the last read of HubSpot that saw every logged email of the contact. */
+  readonly signalsCheckedAt: Date | null;
   /** `settings.followups_enabled` now: with follow-ups off, none is coming for this lead. */
   readonly followupsEnabled: boolean;
 }
@@ -66,13 +71,21 @@ function isFiltered(lead: LeadStatusInput): boolean {
   return !isOverridden(lead) && lead.classification !== null && !isDraftableClassification(lead.classification);
 }
 
-/** The latest email to the owner about this lead (the first notification or a follow-up), or null. */
-function lastOwnerEmailAt(lead: LeadStatusInput): Date | null {
-  let latest: Date | null = null;
-  for (const at of [lead.firstNotifiedAt, lead.fu1NotifiedAt, lead.fu2NotifiedAt]) {
-    if (at !== null && (latest === null || at.getTime() > latest.getTime())) latest = at;
-  }
-  return latest;
+/** The emails to the owner about this lead (the first notification and the follow-ups), oldest first. */
+function ownerEmails(lead: LeadStatusInput): Date[] {
+  return [lead.firstNotifiedAt, lead.fu1NotifiedAt, lead.fu2NotifiedAt]
+    .filter((at): at is Date => at !== null)
+    .sort((a, b) => a.getTime() - b.getTime());
+}
+
+/**
+ * HubSpot's logged emails were all read after the owner email before the last one: the check a
+ * follow-up job made before its email went out, or any later one (a refresh). A lead with one email
+ * needs a check after it.
+ */
+function repliesChecked(lead: LeadStatusInput, emails: readonly Date[]): boolean {
+  const since = emails.length >= 2 ? emails[emails.length - 2] : emails[0];
+  return since !== undefined && lead.signalsCheckedAt !== null && lead.signalsCheckedAt.getTime() >= since.getTime();
 }
 
 /** No follow-up is coming: both were emailed, follow-ups stopped for this lead, or they are off. */
@@ -81,8 +94,11 @@ function followUpsFinishedOrOff(lead: LeadStatusInput): boolean {
 }
 
 function isNoReply(lead: LeadStatusInput, now: Date): boolean {
-  const last = lastOwnerEmailAt(lead);
-  return last !== null && followUpsFinishedOrOff(lead) && now.getTime() - last.getTime() >= NO_REPLY_AFTER_MS;
+  const emails = ownerEmails(lead);
+  const last = emails.at(-1);
+  return (
+    last !== undefined && followUpsFinishedOrOff(lead) && now.getTime() - last.getTime() >= NO_REPLY_AFTER_MS && repliesChecked(lead, emails)
+  );
 }
 
 /** D-32, rules 1–9 in order. */

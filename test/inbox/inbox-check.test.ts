@@ -481,7 +481,7 @@ describe('the test lead', () => {
       dedupeKey: NotificationKeys.followUp(leadId, 1, 0),
       accountId: rig.accountId,
       leadId,
-      predicates: NotificationPredicates.followUp(scope),
+      predicates: NotificationPredicates.followUp(scope, 1),
       render: () => {
         throw new Error('must not render');
       },

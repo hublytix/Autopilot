@@ -53,8 +53,14 @@ export async function releaseJob(db: Db, job: Pick<JobRow, 'id'>, attemptId: str
   return rows.length === 1;
 }
 
-/** Locks the row inside `tx` and throws JobLeaseLostError unless `attemptId` still holds it. */
-export async function assertJobOwned(tx: Db, jobId: string, attemptId: string): Promise<void> {
+/**
+ * Locks the row inside `tx` and throws JobLeaseLostError unless `attemptId` still holds it. A job of a
+ * lead locks the lead row first (`for no key update`): row locks are always taken leads before
+ * scheduled_jobs (docs/ARCHITECTURE.md), as markReplied, dismiss, "Resume follow-ups" and the revoke
+ * transition do, so a handler's guarded write never deadlocks against them on Postgres (D-73).
+ */
+export async function assertJobOwned(tx: Db, jobId: string, attemptId: string, leadId: string | null = null): Promise<void> {
+  if (leadId !== null) await tx.query(`select 1 from leads where id = $1 for no key update`, [leadId]);
   const row = await tx.maybeOne(
     `select id from scheduled_jobs where id = $1 and attempt_id = $2 and status = 'running' for update`,
     [jobId, attemptId],

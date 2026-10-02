@@ -7,9 +7,9 @@ import { Layout } from './Layout';
 // the lead while follow-ups were still scheduled, so the remaining follow-ups were cancelled. A
 // "reply" here always means the lead's reply (D-37). It links to the contact's record in HubSpot
 // (read-only for us, law 2) where the owner reads and answers it. It has no send button, so the
-// "isn't monitored" line says to answer from the owner's own mailbox. If the reply was an automatic
-// one (an out-of-office message), the owner can resume follow-ups from the dashboard (D-42).
-// Presentational only.
+// "isn't monitored" line says to answer from the owner's own mailbox. The "resume follow-ups" line
+// (D-42) appears only with `resumeFollowUpsUrl`: the page that offers "Resume follow-ups" (M6's lead
+// page). Until a page offers it, the email does not promise it (law 5, D-73). Presentational only.
 
 /** `{Name} replied — follow-ups stopped`, or "Your lead replied — …" when there is no safe name. */
 export function replyDetectedSubject(safeFirstName: string | null): string {
@@ -25,8 +25,8 @@ export interface ReplyDetectedProps {
   repliedAtText: string | null;
   /** https://{uiDomain}/contacts/{portalId}/record/0-1/{contactId}; null when unknown. */
   hubspotRecordUrl: string | null;
-  /** `{APP_URL}/dashboard`. */
-  dashboardUrl: string;
+  /** The page with "Resume follow-ups" for this lead; null (no promise of it) until a page offers it (law 5). */
+  resumeFollowUpsUrl?: string | null | undefined;
 }
 
 export function ReplyDetected(props: ReplyDetectedProps) {
@@ -47,13 +47,15 @@ export function ReplyDetected(props: ReplyDetectedProps) {
           Open the contact in HubSpot
         </Button>
       )}
-      <Text style={note}>
-        If it was an automatic reply, such as an out-of-office message, you can resume follow-ups from your{' '}
-        <Link href={props.dashboardUrl} style={link}>
-          dashboard
-        </Link>
-        .
-      </Text>
+      {props.resumeFollowUpsUrl === null || props.resumeFollowUpsUrl === undefined ? null : (
+        <Text style={note}>
+          If it was an automatic reply, such as an out-of-office message, you can{' '}
+          <Link href={props.resumeFollowUpsUrl} style={link}>
+            resume follow-ups
+          </Link>
+          .
+        </Text>
+      )}
     </Layout>
   );
 }

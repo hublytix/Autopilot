@@ -427,7 +427,7 @@ describe('predicates per kind', () => {
     const now = rig.deps.clock.now();
     const { accountId } = await seedActiveAccount(db, now);
     const older = await seedLead(db, { accountId, now, contactId: '501', submittedAt: new Date(now.getTime() - 3_600_000) });
-    const p = NotificationPredicates.followUp({ accountId, leadId: older });
+    const p = NotificationPredicates.followUp({ accountId, leadId: older }, 1);
     expect(await reserves(p, 'alert:f:1', accountId)).toBe(true);
     // A newer lead for the same contact that has not been notified yet does not supersede.
     const newer = await seedLead(db, { accountId, now, contactId: '501' });
@@ -442,12 +442,32 @@ describe('predicates per kind', () => {
     expect(await reserves(p, 'alert:f:5', accountId)).toBe(false);
   });
 
+  it('followUp n: refused once follow-up n was emailed (any stream), the other one still allowed (D-73)', async () => {
+    const setup = await activeLead();
+    const scope = { accountId: setup.accountId, leadId: setup.leadId };
+    expect(await reserves(NotificationPredicates.followUp(scope, 1), 'alert:n:1', setup.accountId)).toBe(true);
+    await getDb().query(`update leads set fu1_notified_at = $2 where id = $1`, [setup.leadId, rig.deps.clock.now()]);
+    expect(await reserves(NotificationPredicates.followUp(scope, 1), 'alert:n:2', setup.accountId)).toBe(false);
+    expect(await reserves(NotificationPredicates.followUp(scope, 2), 'alert:n:3', setup.accountId)).toBe(true);
+    await getDb().query(`update leads set fu2_notified_at = $2 where id = $1`, [setup.leadId, rig.deps.clock.now()]);
+    expect(await reserves(NotificationPredicates.followUp(scope, 2), 'alert:n:4', setup.accountId)).toBe(false);
+  });
+
   it('replyDetected: needs replied_at', async () => {
     const setup = await activeLead();
     const p = NotificationPredicates.replyDetected({ accountId: setup.accountId, leadId: setup.leadId });
     expect(await reserves(p, 'alert:r:1', setup.accountId)).toBe(false);
     await getDb().query(`update leads set replied_at = $1`, [rig.deps.clock.now()]);
     expect(await reserves(p, 'alert:r:2', setup.accountId)).toBe(true);
+  });
+
+  it('replyDetected: never for a test lead (D-08, D-14)', async () => {
+    const db = getDb();
+    const now = rig.deps.clock.now();
+    const { accountId } = await seedActiveAccount(db, now);
+    const testLead = await seedLead(db, { accountId, now, isTest: true });
+    await db.query(`update leads set replied_at = $2 where id = $1`, [testLead, now]);
+    expect(await reserves(NotificationPredicates.replyDetected({ accountId, leadId: testLead }), 'alert:r:t', accountId)).toBe(false);
   });
 
   it('inboxTest: onboarding or active only, test lead only', async () => {

@@ -1,6 +1,12 @@
 import 'server-only';
+import { JOB_LEASE_MS } from '@/server/jobs/types';
 import { log } from '@/server/obs/log';
-import { defaultNotificationRegistry, type NotificationRegistry, type NotificationResumer } from '@/server/services/notifications/renderers';
+import {
+  defaultNotificationRegistry,
+  type NotificationFailureHook,
+  type NotificationRegistry,
+  type NotificationResumer,
+} from '@/server/services/notifications/renderers';
 import { followUpNotificationPlan } from './follow-up-notification';
 import { initialNotificationPlan } from './initial-notification';
 import { replyDetectedNotificationPlan } from './reply-detected-notification';
@@ -48,7 +54,14 @@ const resumeLeadEmail: NotificationResumer = async (deps, row) => {
     return built.ok ? built.plan : unresumable(row, built.problem);
   }
   if (key.type === 'follow_up' && (row.kind === 'follow_up' || row.kind === 'needs_touch')) {
-    const built = await followUpNotificationPlan(deps, { accountId: row.accountId, leadId: key.leadId, n: key.n, followupStream: key.followupStream });
+    const built = await followUpNotificationPlan(deps, {
+      accountId: row.accountId,
+      leadId: key.leadId,
+      n: key.n,
+      followupStream: key.followupStream,
+      // The job read HubSpot within its lease before it reserved: a complete read since then counts.
+      repliesCheckedSince: new Date(row.firstReservedAt.getTime() - JOB_LEASE_MS),
+    });
     return built === null ? unresumable(row, 'source') : built.plan;
   }
   return unresumable(row, 'kind');
@@ -67,11 +80,47 @@ const RESUMERS = [
   ['reply_detected', resumeReplyDetected],
 ] as const;
 
-/** Registers the lead email resumers (part of registerLeadProcessJob); safe to call more than once. */
+/**
+ * A lead's first email (`notify:{lead}:initial:r{rev}`) became `failed` unsent outside lead_process
+ * (D-72 closing D-68's open point, D-73): the sweeper expired it after 23 h, or a resume (the sweeper's
+ * takeover after the job ended on a send outage, D-68) found its predicates failing, could not rebuild
+ * it, or got a permanent send error. The lead, still `processing` at that revision, becomes `skipped`
+ * when the predicates failed (as lead_process does: dismissed, paused, disconnected, …) and `failed`
+ * otherwise ("Not processed", D-32), in the same transaction. It gets no follow-ups (only the `sent`
+ * transaction creates them). A lead that moved on (notified by the paired email, re-processed after an
+ * override) is left alone.
+ */
+export const initialEmailFailed: NotificationFailureHook = {
+  inTx: async (tx, row, failure) => {
+    const key = parseLeadNotificationKey(row.dedupeKey);
+    if (key?.type !== 'initial' || row.accountId === null) return;
+    const state = failure.reason === 'predicates' ? 'skipped' : 'failed';
+    const changed = await tx.maybeOne(
+      `update leads set processing_state = $4
+        where id = $1 and account_id = $2 and process_rev = $3 and processing_state = 'processing' and not is_test
+        returning id`,
+      [key.leadId, row.accountId, key.processRev, state],
+    );
+    if (changed !== null) {
+      log.warn('lead email not sent: lead not processed', {
+        event: 'lead.notification_abandoned',
+        accountId: row.accountId,
+        leadId: key.leadId,
+        notificationKind: row.kind,
+        reason: failure.reason,
+        status: state,
+      });
+    }
+  },
+};
+
+/** Registers the lead email resumers and the initial email's failure hook (part of registerLeadProcessJob); safe to call more than once. */
 export function registerLeadNotifications(registries: { readonly notifications: NotificationRegistry }): void {
   for (const [kind, resumer] of RESUMERS) {
     if (registries.notifications.resumer(kind) === undefined) registries.notifications.register(kind, resumer);
   }
+  registries.notifications.onFailed('new_lead', initialEmailFailed);
+  registries.notifications.onFailed('needs_touch', initialEmailFailed);
 }
 
 /** Before a sendReserved in this process (M5's markReplied): the resumers are in the default registry. */

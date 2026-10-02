@@ -30,7 +30,10 @@ import { NO_POST_COMMIT_WORK, runPostCommitWork, type PostCommitWork } from './p
 //    → inactive (from any):     the billing_inactive email is reserved, key
 //                               billing-inactive:{acct}:{entitlement_lost_at};
 //    → revoked / disconnected:  purge_after = $now + 30 d; jobs cancelled (except privacy deletions,
-//                               which run whatever the state, D-06); action tokens revoked;
+//                               which run whatever the state, D-06); action tokens revoked; a lead
+//                               whose follow-up jobs this cancels gets `stop_reason =
+//                               'account_inactive'` (kept if it had one), so its status reads "No
+//                               reply from lead" after a reconnect, not "follow-ups pending" (D-72);
 //    → paused, → onboarding:    nothing (pending follow-ups fail their reservation predicates).
 // The emails and QStash cancels run after commit (runPostCommitWork).
 
@@ -168,6 +171,15 @@ async function runTransition(tx: Db, input: TransitionInput): Promise<PostCommit
             set purge_after = $2, disconnected_at = case when $3::boolean then coalesce(disconnected_at, $4) else disconnected_at end
           where id = $1`,
         [accountId, purgeAfter, input.next === 'disconnected', now],
+      );
+      // Leads before scheduled_jobs (the row lock order, docs/ARCHITECTURE.md): the stream end of every
+      // lead whose follow-up jobs this transition cancels is written first, then the jobs are cancelled.
+      await tx.query(
+        `update leads set stop_reason = 'account_inactive'
+          where account_id = $1 and stop_reason is null and not is_test
+            and id in (select lead_id from scheduled_jobs
+                        where account_id = $1 and kind = 'followup' and status in ('scheduled', 'running') and lead_id is not null)`,
+        [accountId],
       );
       const cancelled = await cancelJobsInTx(tx, { accountId, exceptKinds: ACCOUNT_CANCEL_EXCEPT_KINDS, reason: input.next, now });
       await revokeTokens(tx, { accountId, now });

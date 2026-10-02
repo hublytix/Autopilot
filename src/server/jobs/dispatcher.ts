@@ -122,7 +122,7 @@ export async function runJob(deps: Deps, input: RunJobInput, registry: JobRegist
     retried: input.retried,
     isFinalDelivery: input.retried >= JOB_RETRIES,
     claimedAt: now,
-    assertOwned: (tx) => assertJobOwned(tx, job.id, attemptId),
+    assertOwned: (tx) => assertJobOwned(tx, job.id, attemptId, job.leadId),
   };
   const handler = registry.handler(job.kind);
   let outcome: JobOutcome;

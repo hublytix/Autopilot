@@ -11,8 +11,9 @@ import { needsTouchReasonText, type NeedsTouchWhy } from './NeedsTouch';
 
 // The follow-up email (brief §5.6, PLAN §9.5 step 5, D-27, D-34): follow-up 1 (day 2) or 2 (day 5)
 // for a lead with no logged reply, drafted for the owner to send from their own mailbox (law 1).
-// It opens with the "isn't monitored" line (D-27), states the honest notes from D-34 when HubSpot
-// has not confirmed the first send or does not log replies (law 3), shows the lead card, the lead's
+// It opens with the "isn't monitored" line (D-27), says no reply is logged only when the check read
+// every logged email (otherwise that it could not tell, D-73), states the honest notes from D-34 when
+// HubSpot has not confirmed the first send or does not log replies (law 3), shows the lead card, the lead's
 // message (unverified, defanged; while it is stored), the follow-up draft and the three buttons.
 // When the follow-up draft is the starter template (`needsTouch`), it says why. Presentational only.
 
@@ -20,6 +21,20 @@ import { needsTouchReasonText, type NeedsTouchWhy } from './NeedsTouch';
 export function followUpSubject(n: 1 | 2, safeFirstName: string | null, needsTouch = false): string {
   const tail = needsTouch ? 'your draft needs your touch' : 'your draft is ready';
   return safeFirstName === null ? `Follow-up ${n} — ${tail}` : `Follow-up ${n} for ${safeFirstName} — ${tail}`;
+}
+
+/**
+ * The opening line. "No reply … is logged" only when the check read every logged email (law 3); the
+ * threshold is when we first emailed the owner about the lead, not an email the owner may not have sent.
+ */
+export function followUpOpening(n: 1 | 2, repliesUnchecked: boolean): string {
+  const offer = n === 1 ? 'Here is a short follow-up you can send.' : 'Here is a last short follow-up you can send.';
+  if (repliesUnchecked) {
+    return `We couldn't read the emails logged in HubSpot for this lead this time, so we can't tell whether the lead replied. Check your inbox before you send anything. ${offer}`;
+  }
+  return n === 1
+    ? `No reply from this lead is logged in HubSpot since we first emailed you about them. ${offer}`
+    : `Still no reply from this lead is logged in HubSpot. ${offer}`;
 }
 
 export interface FollowUpProps extends ActionLinks {
@@ -34,6 +49,8 @@ export interface FollowUpProps extends ActionLinks {
   message: string | null;
   /** `leads.send_confirmed_at` is set: HubSpot shows the first reply was sent. */
   sendConfirmed: boolean;
+  /** The check before this follow-up could not read every email logged in HubSpot: never say "no reply is logged" (law 3). */
+  repliesUnchecked?: boolean | undefined;
   /** `accounts.logging_mode`. */
   loggingMode: LoggingMode;
   /** Set when the follow-up draft is the starter template: why. */
@@ -52,11 +69,7 @@ export function FollowUp(props: FollowUpProps) {
       <Heading as="h1" style={heading}>
         {props.firstName === null ? `Follow-up ${props.n}` : `Follow-up ${props.n} for ${props.firstName}`}
       </Heading>
-      <Text style={paragraph}>
-        {props.n === 1
-          ? 'No reply from this lead is logged in HubSpot since your first email. Here is a short follow-up you can send.'
-          : 'Still no reply from this lead is logged in HubSpot. Here is a last short follow-up you can send.'}
-      </Text>
+      <Text style={paragraph}>{followUpOpening(props.n, props.repliesUnchecked === true)}</Text>
       <HonestNotes notes={notes} />
       {props.needsTouch === undefined ? null : (
         <Text style={paragraph}>

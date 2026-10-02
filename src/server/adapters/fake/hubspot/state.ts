@@ -200,6 +200,8 @@ export const API_FAILURE_KINDS = [
   'timeout',
   'network',
   'unauthorized',
+  /** 403 MISSING_SCOPES (a scope the grant no longer has). */
+  'missing_scopes',
 ] as const;
 export type ApiFailureKind = (typeof API_FAILURE_KINDS)[number];
 

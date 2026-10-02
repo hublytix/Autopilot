@@ -16,7 +16,9 @@ import { displayMessage, leadCardOf, loadLeadEmailSource, safeNameOf } from './e
 // follow-up draft is the starter template; both share `notify:{leadId}:fu{n}:s{followup_stream}`.
 // Predicates (§8.4): the initial ones plus replied_at null, not superseded (D-44), follow-ups on.
 // The `sent` transaction sets `fu{n}_notified_at` (kept if already set). The honest notes (D-34)
-// are derived from `send_confirmed_at` and `logging_mode` at render time.
+// are derived from `send_confirmed_at` and `logging_mode` at render time. "No reply … is logged" is
+// said only when the check before this follow-up read every logged email; otherwise the email says
+// it could not tell (law 3, D-73).
 
 export type FollowUpKind = 'follow_up' | 'needs_touch';
 
@@ -27,6 +29,17 @@ export interface FollowUpNotificationInput {
   readonly followupStream: number;
   /** For a needs-touch follow-up: why, in the owner's words. Default 'unknown'. */
   readonly why?: NeedsTouchWhy | undefined;
+  /**
+   * The follow-up job's check read every email logged on the contact (ApplySignalsResult.emailsAvailable),
+   * so the email may say no reply is logged. Left out by the resumer, which uses `repliesCheckedSince`.
+   */
+  readonly repliesChecked?: boolean | undefined;
+  /**
+   * For a resumed send: the replies count as checked when the last complete read of HubSpot
+   * (`signals_checked_at`) is at or after this (the job's check, just before its reservation).
+   * Neither given: not checked ("not enough data", law 3).
+   */
+  readonly repliesCheckedSince?: Date | undefined;
 }
 
 export interface FollowUpNotification {
@@ -60,9 +73,12 @@ export async function followUpNotificationPlan(
   const message = displayMessage(source.message);
   const to = [...source.to];
   const replyTo = source.replyTo ?? undefined;
+  const since = input.repliesCheckedSince;
+  const repliesChecked =
+    input.repliesChecked ?? (since !== undefined && source.signalsCheckedAt !== null && source.signalsCheckedAt.getTime() >= since.getTime());
 
   const plan: NotificationSendPlan = {
-    predicates: NotificationPredicates.followUp({ accountId: source.accountId, leadId: source.leadId }),
+    predicates: NotificationPredicates.followUp({ accountId: source.accountId, leadId: source.leadId }, input.n),
     buttons: LEAD_EMAIL_BUTTONS,
     draftId: draft.id,
     render: async (tokens): Promise<RenderedMail> => {
@@ -74,6 +90,7 @@ export async function followUpNotificationPlan(
           lead,
           message,
           sendConfirmed: source.sendConfirmedAt !== null,
+          repliesUnchecked: !repliesChecked,
           loggingMode: source.loggingMode,
           needsTouch: draft.needsTouch ? (input.why ?? 'unknown') : undefined,
           draftSubject: draft.subject,

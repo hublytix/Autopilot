@@ -8,7 +8,9 @@ import type { Db } from '@/server/db';
 // pseudonymous identifier of the lead, D-31). Keys outside AUDIT_META_KEYS, and string values that
 // do not look like an id, a code or an ISO instant, are refused before anything is written.
 
-export const AUDIT_META_KEYS = ['formId', 'submittedAt'] as const;
+// leadId/repliedAt/followupStream: "Resume follow-ups" records the cleared reply time (D-42);
+// pausedAt: Pause/Resume record which pause they started or ended (PLAN §9.6).
+export const AUDIT_META_KEYS = ['formId', 'submittedAt', 'leadId', 'repliedAt', 'followupStream', 'pausedAt'] as const;
 export type AuditMetaKey = (typeof AUDIT_META_KEYS)[number];
 export type AuditMeta = Partial<Record<AuditMetaKey, string | number | boolean | null>>;
 

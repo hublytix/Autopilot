@@ -8,8 +8,9 @@
 // Stages so far: boot (M1), the real onboarding pre-run (M3), Day 0 intake with the drafted
 // new_lead emails and the owner's "Send from my email" taps (M2 + M4), `day-0-emails` (M4: "Edit
 // first" and "Not a real lead" on the new_lead emails, and every action link of those emails
-// resolving without counting a click), and the test-lead exclusions (M3); see
-// scripts/simulation/stages.ts.
+// resolving without counting a click), Days 1–5 (M5: #5's send on Wednesday, follow-up 1 ×4 on
+// Thursday, #6's reply on Friday, follow-up 2 ×3 and reply_detected on Sunday, statuses after each
+// step), and the test-lead exclusions (M3); see scripts/simulation/stages.ts.
 import path from 'node:path';
 import { runSimulation, SUMMARY_FILE } from './simulation/run';
 

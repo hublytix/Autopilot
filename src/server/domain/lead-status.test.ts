@@ -35,6 +35,7 @@ function lead(overrides: Partial<LeadStatusInput> = {}): LeadStatusInput {
     fu2NotifiedAt: null,
     firstSendClickedAt: null,
     sendConfirmedAt: null,
+    signalsCheckedAt: null,
     followupsEnabled: true,
     ...overrides,
   };
@@ -50,8 +51,8 @@ const MAKES: Record<LeadDisplayStatus, Partial<LeadStatusInput>> = {
   replied: { repliedAt: ago(2 * DAY) },
   filtered: { classification: 'spam' },
   not_processed: { processingState: 'failed' },
-  // Both follow-ups emailed (the last one 3 days ago): no follow-up is coming.
-  no_reply: { fu2NotifiedAt: ago(3 * DAY) },
+  // Both follow-ups emailed (the last one 3 days ago, after a complete check): no follow-up is coming.
+  no_reply: { fu2NotifiedAt: ago(3 * DAY), signalsCheckedAt: ago(3 * DAY) },
   send_confirmed: { sendConfirmedAt: ago(7 * DAY) },
   send_clicked: { firstSendClickedAt: ago(7 * DAY) },
   // Emailed 10 days ago, follow-ups still to come.
@@ -159,7 +160,8 @@ describe('deriveLeadStatus "no reply" (D-32 rule 5)', () => {
   const notified = lead({ processingState: 'notified', firstNotifiedAt: ago(10 * DAY), sendConfirmedAt: ago(10 * DAY) });
 
   it('starts exactly 2 days after the last follow-up email', () => {
-    const finished = { ...notified, fu1NotifiedAt: ago(8 * DAY) };
+    // Follow-up 2's job read HubSpot in full an hour before its email.
+    const finished = { ...notified, fu1NotifiedAt: ago(8 * DAY), signalsCheckedAt: ago(2 * DAY + HOUR) };
     expect(deriveLeadStatus({ ...finished, fu2NotifiedAt: ago(NO_REPLY_AFTER_MS) }, NOW)).toBe('no_reply');
     expect(deriveLeadStatus({ ...finished, fu2NotifiedAt: ago(NO_REPLY_AFTER_MS - 1) }, NOW)).toBe('send_confirmed');
     expect(NO_REPLY_AFTER_MS).toBe(2 * DAY);
@@ -167,16 +169,32 @@ describe('deriveLeadStatus "no reply" (D-32 rule 5)', () => {
 
   it('applies when follow-ups stopped early, counting from the last email sent', () => {
     for (const stopReason of STOP_REASONS.filter((reason) => reason !== 'dismissed' && reason !== 'replied')) {
-      const stopped = { ...notified, stopReason, fu1NotifiedAt: ago(2 * DAY) };
+      const stopped = { ...notified, stopReason, fu1NotifiedAt: ago(2 * DAY), signalsCheckedAt: ago(2 * DAY + HOUR) };
       expect(deriveLeadStatus(stopped, NOW)).toBe('no_reply');
       expect(deriveLeadStatus({ ...stopped, fu1NotifiedAt: ago(2 * DAY - 1) }, NOW)).toBe('send_confirmed');
     }
   });
 
-  it('applies when follow-ups are off, 2 days after the first email', () => {
-    const off = lead({ ...MAKES.drafted, firstNotifiedAt: ago(2 * DAY), followupsEnabled: false });
+  it('applies when follow-ups are off, 2 days after the first email, once HubSpot was read after it', () => {
+    const off = lead({ ...MAKES.drafted, firstNotifiedAt: ago(2 * DAY), followupsEnabled: false, signalsCheckedAt: ago(HOUR) });
     expect(deriveLeadStatus(off, NOW)).toBe('no_reply');
     expect(deriveLeadStatus({ ...off, firstNotifiedAt: ago(2 * DAY - 1) }, NOW)).toBe('drafted');
+  });
+
+  it('never claims "none logged" when nobody read HubSpot after the last email went out (law 3, D-73)', () => {
+    // Follow-ups off when the lead was notified (stop_reason followups_off): nothing ever read HubSpot.
+    const off = lead({ processingState: 'notified', firstNotifiedAt: ago(5 * DAY), stopReason: 'followups_off', followupsEnabled: false });
+    expect(deriveLeadStatus(off, NOW)).toBe('drafted');
+    expect(deriveLeadStatus({ ...off, firstSendClickedAt: ago(4 * DAY) }, NOW)).toBe('send_clicked');
+    // Paused through both follow-ups: the jobs stopped before any read; the stream end is stored.
+    const paused = lead({ processingState: 'notified', firstNotifiedAt: ago(9 * DAY), stopReason: 'account_inactive', sendConfirmedAt: ago(9 * DAY) });
+    expect(deriveLeadStatus(paused, NOW)).toBe('send_confirmed');
+    // A read that is older than the email before the last one (follow-up 2's job could not read the emails).
+    const blind = { ...notified, fu1NotifiedAt: ago(8 * DAY), fu2NotifiedAt: ago(5 * DAY), signalsCheckedAt: ago(8 * DAY + HOUR) };
+    expect(deriveLeadStatus(blind, NOW)).toBe('send_confirmed');
+    // A later complete read (the lead page's refresh) makes the claim true.
+    expect(deriveLeadStatus({ ...paused, signalsCheckedAt: ago(DAY) }, NOW)).toBe('no_reply');
+    expect(deriveLeadStatus({ ...blind, signalsCheckedAt: ago(DAY) }, NOW)).toBe('no_reply');
   });
 
   it('never applies while a follow-up is still coming', () => {
@@ -194,7 +212,8 @@ describe('deriveLeadStatus "no reply" (D-32 rule 5)', () => {
     const day0 = new Date('2026-10-06T14:00:00.000Z');
     const day2 = new Date('2026-10-08T14:00:00.000Z');
     const day5 = new Date('2026-10-11T14:00:00.000Z');
-    const emailed = { processingState: 'notified', firstNotifiedAt: day0, fu1NotifiedAt: day2 } as const;
+    // Follow-up 2's job read HubSpot in full just before its email.
+    const emailed = { processingState: 'notified', firstNotifiedAt: day0, fu1NotifiedAt: day2, signalsCheckedAt: day5 } as const;
     const statuses = [
       lead({ ...emailed, fu2NotifiedAt: day5, sendConfirmedAt: new Date('2026-10-06T14:13:00.000Z') }),
       lead({ ...emailed, fu2NotifiedAt: day5, firstSendClickedAt: new Date('2026-10-06T15:00:00.000Z') }),

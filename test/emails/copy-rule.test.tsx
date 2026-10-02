@@ -120,12 +120,17 @@ function ownerEmails(): [string, ReactElement][] {
         for (const sendConfirmed of [true, false]) {
           emails.push([`FollowUp ${n}`, createElement(FollowUp, { ...LEAD_EMAIL_BASE, firstName, loggingMode, n, sendConfirmed })]);
           emails.push([`FollowUp ${n} needs touch`, createElement(FollowUp, { ...LEAD_EMAIL_BASE, firstName, loggingMode, n, sendConfirmed, needsTouch: 'checks' })]);
+          emails.push([`FollowUp ${n} replies unchecked`, createElement(FollowUp, { ...LEAD_EMAIL_BASE, firstName, loggingMode, n, sendConfirmed, repliesUnchecked: true })]);
         }
       }
     }
     emails.push([
+      'ReplyDetected without the resume line',
+      createElement(ReplyDetected, { productName: PRODUCT, firstName, repliedAtText: null, hubspotRecordUrl: null }),
+    ]);
+    emails.push([
       'ReplyDetected',
-      createElement(ReplyDetected, { productName: PRODUCT, firstName, repliedAtText: 'Tue 6 Oct, 10:15', hubspotRecordUrl: 'https://app.hubspot.com/contacts/1/record/0-1/2', dashboardUrl: 'http://localhost:3000/dashboard' }),
+      createElement(ReplyDetected, { productName: PRODUCT, firstName, repliedAtText: 'Tue 6 Oct, 10:15', hubspotRecordUrl: 'https://app.hubspot.com/contacts/1/record/0-1/2', resumeFollowUpsUrl: 'http://localhost:3000/leads/1' }),
     ]);
   }
   emails.push([

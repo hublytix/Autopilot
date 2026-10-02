@@ -344,6 +344,8 @@ export const HUBSPOT_CONTACT_PROPERTIES = [
   'hs_email_bad_address',
   'hs_email_hard_bounce_reason_enum',
   'hs_sales_email_last_replied',
+  /** Ids only: the contact ids a merge folded into this record (HS-CONTACT-DELETED-MERGED; D-73). */
+  'hs_merged_object_ids',
 ] as const;
 export type HubSpotContactProperty = (typeof HUBSPOT_CONTACT_PROPERTIES)[number];
 export const isHubSpotContactProperty = isOneOf(HUBSPOT_CONTACT_PROPERTIES);

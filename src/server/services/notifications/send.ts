@@ -1,6 +1,8 @@
 import 'server-only';
 import { AppError, errorCode, isIdempotencyConflict, isRetryable, PermanentError, TransientError } from '@/server/domain/errors';
+import type { Db } from '@/server/db';
 import { raiseAlert } from '@/server/jobs/alert';
+import { cancelScheduledMessages, type CancelledJobs } from '@/server/jobs/cancel';
 import { publishJobs } from '@/server/jobs/outbox';
 import type { JobRow } from '@/server/jobs/types';
 import { log } from '@/server/obs/log';
@@ -8,7 +10,12 @@ import type { Deps, MailTag, OutgoingMail } from '@/server/ports';
 import { mintActionTokens, revokeTokens, type MintedTokens } from '@/server/security/action-tokens';
 import { claimOnce, rateLimitKeyHash } from '@/server/security/rate-limit';
 import { canTakeOver } from './predicates';
-import { defaultNotificationRegistry, type NotificationRegistry } from './renderers';
+import {
+  defaultNotificationRegistry,
+  type NotificationFailureHook,
+  type NotificationFailureReason,
+  type NotificationRegistry,
+} from './renderers';
 import { failReservation, getNotification, reserveInTx, takeOver } from './reserve';
 import type { NotificationRow, NotificationSendPlan, ReserveAndSendInput, SendResult } from './types';
 
@@ -25,6 +32,10 @@ import type { NotificationRow, NotificationSendPlan, ReserveAndSendInput, SendRe
 //      revokes the new tokens and raises one alert; Resend's 409 on our own key means an earlier
 //      attempt's email already went out: the row is marked sent and the new tokens revoked;
 //   5. in one transaction: `sent` + the caller's onSent (lead timestamp, follow-up job rows).
+// A resumed reservation (the sweeper, sendReserved) that ends `failed` unsent runs the kind's failure
+// hooks in the transaction that fails it (renderers.ts, D-73); reserveAndSend's caller handles its own
+// result. A caller that holds a job passes `guard` (its ownership check): the reservation and any
+// takeover then happen only while the job is still its own (D-73: a cancelled job never reserves).
 
 const QUOTA_CODES: ReadonlySet<string> = new Set(['daily_quota_exceeded', 'monthly_quota_exceeded']);
 
@@ -55,14 +66,24 @@ function skipped(reason: Extract<SendResult, { status: 'skipped' }>['reason']): 
 /** Reserves `input.dedupeKey` and sends the email once. Throws TransientError when the send should be retried. */
 export async function reserveAndSend(deps: Deps, input: ReserveAndSendInput): Promise<SendResult> {
   const now = deps.clock.now();
-  const reserved = await reserveInTx(deps.db, {
-    kind: input.kind,
-    dedupeKey: input.dedupeKey,
-    accountId: input.accountId,
-    leadId: input.leadId,
-    predicates: input.predicates,
-    now,
-  });
+  const guarded = async <T>(work: (db: Db) => Promise<T>): Promise<T> => {
+    const guard = input.guard;
+    if (guard === undefined) return work(deps.db);
+    return deps.db.tx(async (tx) => {
+      await guard(tx);
+      return work(tx);
+    });
+  };
+  const reserved = await guarded((db) =>
+    reserveInTx(db, {
+      kind: input.kind,
+      dedupeKey: input.dedupeKey,
+      accountId: input.accountId,
+      leadId: input.leadId,
+      predicates: input.predicates,
+      now,
+    }),
+  );
   if (reserved !== null) return deliver(deps, reserved, input);
 
   const existing = await getNotification(deps.db, input.dedupeKey);
@@ -73,10 +94,53 @@ export async function reserveAndSend(deps: Deps, input: ReserveAndSendInput): Pr
     log.warn('notification takeover refused', { event: 'notification.kind_mismatch', notificationKind: input.kind, reservationId: existing.id });
     return skipped('kind_mismatch');
   }
-  const taken = await takeOver(deps.db, existing, input.kind, input.predicates, now);
+  const taken = await guarded((db) => takeOver(db, existing, input.kind, input.predicates, now));
   if (taken.type === 'predicates_failed') return skipped('predicates');
   if (taken.type === 'busy') return skipped('busy');
   return deliver(deps, taken.row, input);
+}
+
+/** Runs `hooks` for `row` inside `tx`; returns the jobs they cancelled. */
+async function runFailureHooksInTx(
+  tx: Db,
+  hooks: readonly NotificationFailureHook[],
+  row: NotificationRow,
+  reason: NotificationFailureReason,
+  now: Date,
+): Promise<CancelledJobs[]> {
+  const cancelled: CancelledJobs[] = [];
+  for (const hook of hooks) {
+    const result = await hook.inTx(tx, row, { reason, now });
+    if (result !== undefined) cancelled.push(result);
+  }
+  return cancelled;
+}
+
+async function cancelAfterCommit(deps: Deps, cancelled: readonly CancelledJobs[]): Promise<void> {
+  for (const jobs of cancelled) await cancelScheduledMessages(deps, jobs);
+}
+
+/**
+ * Marks `row` failed (`fail`, default failReservation: still `sending` at its `reserved_at`) and runs
+ * the kind's failure hooks in the same transaction; after commit, the QStash messages of the jobs they
+ * cancelled. False when the row had changed (nothing ran). A hook error rolls it all back and throws.
+ */
+export async function failReservationWithHooks(
+  deps: Deps,
+  row: NotificationRow,
+  reason: NotificationFailureReason,
+  registry: NotificationRegistry = defaultNotificationRegistry,
+  fail: (tx: Db) => Promise<boolean> = (tx) => failReservation(tx, row),
+): Promise<boolean> {
+  const hooks = registry.failureHooks(row.kind);
+  const now = deps.clock.now();
+  const outcome = await deps.db.tx(async (tx) => {
+    if (!(await fail(tx))) return null;
+    return runFailureHooksInTx(tx, hooks, row, reason, now);
+  });
+  if (outcome === null) return false;
+  await cancelAfterCommit(deps, outcome);
+  return true;
 }
 
 /**
@@ -96,7 +160,8 @@ export async function sendReserved(
 
 /**
  * Resumes a `sending` reservation (step 2's takeover with its own kind, then steps 3-5). The sweeper
- * passes `bySweeper` so the resume counts in `sweeper_resumes`.
+ * passes `bySweeper` so the resume counts in `sweeper_resumes`. A row that ends `failed` unsent here
+ * (no plan, predicates failing, a permanent send error) runs the kind's failure hooks (D-73).
  */
 export async function resumeReservation(
   deps: Deps,
@@ -113,14 +178,20 @@ export async function resumeReservation(
   }
   const plan = await resumer(deps, row);
   if (plan === null) {
-    await failReservation(deps.db, row);
+    await failReservationWithHooks(deps, row, 'not_resumable', registry);
     log.warn('notification cannot be resumed', { event: 'notification.not_resumable', notificationKind: row.kind, reservationId: row.id });
     return { status: 'failed', code: 'notification_not_resumable' };
   }
-  const taken = await takeOver(deps.db, row, row.kind, plan.predicates, deps.clock.now(), { bySweeper: options.bySweeper });
+  const hooks = registry.failureHooks(row.kind);
+  const now = deps.clock.now();
+  const { taken, cancelled } = await deps.db.tx(async (tx) => {
+    const result = await takeOver(tx, row, row.kind, plan.predicates, now, { bySweeper: options.bySweeper });
+    return { taken: result, cancelled: result.type === 'predicates_failed' ? await runFailureHooksInTx(tx, hooks, row, 'predicates', now) : [] };
+  });
+  await cancelAfterCommit(deps, cancelled);
   if (taken.type === 'predicates_failed') return skipped('predicates');
   if (taken.type === 'busy') return skipped('busy');
-  return deliver(deps, taken.row, plan);
+  return deliver(deps, taken.row, plan, hooks);
 }
 
 function withKindTag(tags: readonly MailTag[] | undefined, kind: string): MailTag[] {
@@ -133,8 +204,8 @@ function tokenList(tokens: MintedTokens): string[] {
   return Object.values(tokens).filter((token): token is string => typeof token === 'string');
 }
 
-/** Steps 3-5 for a reservation this caller holds (its `reserved_at` is ours). */
-async function deliver(deps: Deps, row: NotificationRow, plan: NotificationSendPlan): Promise<SendResult> {
+/** Steps 3-5 for a reservation this caller holds (its `reserved_at` is ours). `failureHooks` run on a permanent error. */
+async function deliver(deps: Deps, row: NotificationRow, plan: NotificationSendPlan, failureHooks: readonly NotificationFailureHook[] = []): Promise<SendResult> {
   const buttons = plan.buttons ?? [];
   // Step 3: the attempt count and the tokens commit before anything is sent (D-45).
   const minted = await deps.db.tx(async (tx): Promise<MintedTokens | null> => {
@@ -189,10 +260,13 @@ async function deliver(deps: Deps, row: NotificationRow, plan: NotificationSendP
       if (error instanceof TransientError) throw error;
       throw new TransientError('notification_send_transient', { httpStatus: error.httpStatus });
     } else if (error instanceof AppError) {
-      await deps.db.tx(async (tx) => {
-        await tx.query(`update notifications_sent set status = 'failed' where id = $1 and status = 'sending'`, [row.id]);
-        if (mintedTokens.length > 0) await revokeTokens(tx, { tokens: mintedTokens, now: deps.clock.now() });
+      const now = deps.clock.now();
+      const cancelled = await deps.db.tx(async (tx) => {
+        const failed = await tx.maybeOne(`update notifications_sent set status = 'failed' where id = $1 and status = 'sending' returning id`, [row.id]);
+        if (mintedTokens.length > 0) await revokeTokens(tx, { tokens: mintedTokens, now });
+        return failed === null ? [] : runFailureHooksInTx(tx, failureHooks, row, 'permanent', now);
       });
+      await cancelAfterCommit(deps, cancelled);
       raiseAlert('notification_send_failed', { notificationKind: row.kind, reservationId: row.id, errorCode: error.code });
       return { status: 'failed', code: error.code };
     } else {

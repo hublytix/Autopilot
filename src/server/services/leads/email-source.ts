@@ -39,6 +39,8 @@ export interface LeadEmailSource {
   readonly loggingMode: LoggingMode;
   readonly sendConfirmedAt: Date | null;
   readonly repliedAt: Date | null;
+  /** The last read of HubSpot that saw every logged email of the contact (`leads.signals_checked_at`). */
+  readonly signalsCheckedAt: Date | null;
   /** False once the lead's content is purged or deleted. */
   readonly hasContent: boolean;
   readonly firstName: string | null;
@@ -67,6 +69,7 @@ const rowSchema = z.object({
   logging_mode: z.enum(LOGGING_MODES),
   send_confirmed_at: z.date().nullable(),
   replied_at: z.date().nullable(),
+  signals_checked_at: z.date().nullable(),
   has_content: z.boolean(),
   first_name: z.string().nullable(),
   last_name: z.string().nullable(),
@@ -102,7 +105,7 @@ export async function loadLeadEmailSource(
 ): Promise<LeadEmailSource | null> {
   const raw = await db.maybeOne(
     `select l.account_id, l.id as lead_id, l.process_rev, l.followup_stream, l.processing_state, l.hubspot_contact_id,
-            a.hubspot_portal_id as portal_id, c.ui_domain, a.timezone, a.logging_mode, l.send_confirmed_at, l.replied_at,
+            a.hubspot_portal_id as portal_id, c.ui_domain, a.timezone, a.logging_mode, l.send_confirmed_at, l.replied_at, l.signals_checked_at,
             m.lead_id is not null as has_content, m.first_name, m.last_name, m.company, m.email, m.message,
             d.id as draft_id, d.subject as draft_subject, d.body as draft_body, d.needs_touch as draft_needs_touch,
             d.flags as draft_flags,
@@ -148,6 +151,7 @@ export async function loadLeadEmailSource(
     loggingMode: row.logging_mode,
     sendConfirmedAt: row.send_confirmed_at,
     repliedAt: row.replied_at,
+    signalsCheckedAt: row.signals_checked_at,
     hasContent: row.has_content,
     firstName: row.first_name,
     lastName: row.last_name,

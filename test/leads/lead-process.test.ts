@@ -432,6 +432,77 @@ describe('lead_process: the failure path is never silent', () => {
     expect(rig.fakes.llm.callsFor('draft')).toHaveLength(1);
   });
 
+  it('a new_lead email Resend never accepts within 23 h expires and the lead becomes failed ("Not processed"), not processing forever', async () => {
+    const db = getDb();
+    // Resend refuses every attempt: five deliveries, then every sweeper resume for 23 h.
+    rig.fakes.mailer.injectFailure({ kind: 'transient', code: 'internal_server_error', times: 1000 });
+    const { leadId, job } = await seedProcessableLead();
+    for (let retried = 0; retried <= 4; retried += 1) await deliver(rig, job, { retried });
+    expect(await leadRow(db, leadId)).toMatchObject({ processing_state: 'processing' });
+
+    for (let hour = 0; hour < 23; hour += 1) {
+      rig.clock.advance({ hours: 1 });
+      await runSweeper(rig.deps, { jobRegistry: rig.registry, notificationRegistry: rig.notifications });
+    }
+
+    expect(sent()).toEqual([]);
+    expect(await notifications(db, leadId)).toEqual([{ dedupe_key: `notify:${leadId}:initial:r0`, kind: 'new_lead', status: 'failed' }]);
+    expect(await leadRow(db, leadId)).toMatchObject({ processing_state: 'failed', first_notified_at: null });
+    expect(await followUpJobs(db, leadId)).toEqual([]);
+    expect(alerts.map((alert) => alert.code)).toContain('notification_expired');
+  });
+
+  it('an expired initial email of an older revision leaves the re-processed lead alone', async () => {
+    const db = getDb();
+    rig.fakes.mailer.injectFailure({ kind: 'transient', code: 'internal_server_error', times: 1000 });
+    const { leadId, job } = await seedProcessableLead();
+    for (let retried = 0; retried <= 4; retried += 1) await deliver(rig, job, { retried });
+    // The owner's override moved the lead to a new revision meanwhile.
+    await db.query(`update leads set process_rev = 1 where id = $1`, [leadId]);
+
+    rig.clock.advance({ hours: 23 });
+    await runSweeper(rig.deps, { jobRegistry: rig.registry, notificationRegistry: rig.notifications });
+
+    expect(await notifications(db, leadId)).toEqual([{ dedupe_key: `notify:${leadId}:initial:r0`, kind: 'new_lead', status: 'failed' }]);
+    expect(await leadRow(db, leadId)).toMatchObject({ processing_state: 'processing' });
+  });
+
+  it('Resend down on the final delivery, then the owner pauses: the sweeper\'s takeover fails its predicates and the lead becomes skipped, not processing forever', async () => {
+    const db = getDb();
+    rig.fakes.mailer.injectFailure({ kind: 'transient', code: 'internal_server_error', times: 5 });
+    const { leadId, accountId, job } = await seedProcessableLead();
+    for (let retried = 0; retried <= 4; retried += 1) await deliver(rig, job, { retried });
+    expect((await getJob(db, job.id))?.status).toBe('done');
+    expect(await leadRow(db, leadId)).toMatchObject({ processing_state: 'processing' });
+    await db.query(`update accounts set paused_at = $2, processing_state = 'paused' where id = $1`, [accountId, rig.clock.now()]);
+
+    rig.clock.advance({ minutes: 11 });
+    const summary = await runSweeper(rig.deps, { jobRegistry: rig.registry, notificationRegistry: rig.notifications });
+
+    expect(summary).toMatchObject({ notificationsResumed: 0, errors: 0 });
+    expect(sent()).toEqual([]);
+    expect(await notifications(db, leadId)).toEqual([{ dedupe_key: `notify:${leadId}:initial:r0`, kind: 'new_lead', status: 'failed' }]);
+    expect(await leadRow(db, leadId)).toMatchObject({ processing_state: 'skipped', first_notified_at: null });
+    expect(await followUpJobs(db, leadId)).toEqual([]);
+  });
+
+  it('a permanent Resend error on the sweeper\'s resume: the lead becomes failed ("Not processed") with no second email', async () => {
+    const db = getDb();
+    rig.fakes.mailer.injectFailure({ kind: 'transient', code: 'internal_server_error', times: 5 });
+    const { leadId, job } = await seedProcessableLead();
+    for (let retried = 0; retried <= 4; retried += 1) await deliver(rig, job, { retried });
+    rig.fakes.mailer.injectFailure({ kind: 'permanent', code: 'validation_error' });
+
+    rig.clock.advance({ minutes: 11 });
+    await runSweeper(rig.deps, { jobRegistry: rig.registry, notificationRegistry: rig.notifications });
+
+    expect(sent()).toEqual([]);
+    expect(alerts.map((alert) => alert.code)).toContain('notification_send_failed');
+    expect(await notifications(db, leadId)).toEqual([{ dedupe_key: `notify:${leadId}:initial:r0`, kind: 'new_lead', status: 'failed' }]);
+    expect(await leadRow(db, leadId)).toMatchObject({ processing_state: 'failed', first_notified_at: null });
+    expect(await followUpJobs(db, leadId)).toEqual([]);
+  });
+
   it('an email that went out on the final delivery but whose answer was lost is notified once, with its follow-ups', async () => {
     const db = getDb();
     // Resend accepted the final delivery's email, but the response was lost.

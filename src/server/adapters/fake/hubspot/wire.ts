@@ -210,5 +210,7 @@ export function injectedFailureError(fault: FaultState): AppError {
       return transient(NO_RESPONSE, 'hubspot_network');
     case 'unauthorized':
       return permanent('hubspot_unauthorized', API_WIRE.unauthorized);
+    case 'missing_scopes':
+      return permanent('hubspot_missing_scopes', API_WIRE.missingScopes);
   }
 }

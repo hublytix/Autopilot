@@ -33,7 +33,8 @@ export async function newLeadEmailOf(sim: Simulation, n: number) {
   return leadId === null ? undefined : sim.fakes.mailer.sent.find((mail) => mail.kind === 'new_lead' && mail.lead === leadId);
 }
 
-async function tapSend(sim: Simulation, tap: Day0OwnerTap): Promise<void> {
+/** The owner taps "Send from my email" on submission #n's new_lead email (desktop Gmail → 302). */
+export async function tapSend(sim: Simulation, tap: Day0OwnerTap, checkPrefix = 'day0'): Promise<void> {
   const { deps } = sim;
   const ref = `L${tap.n}`;
   const mail = await newLeadEmailOf(sim, tap.n);
@@ -50,15 +51,16 @@ async function tapSend(sim: Simulation, tap: Day0OwnerTap): Promise<void> {
     const location = response.headers.get('location');
     host = location === null ? null : new URL(location).host;
   }
-  sim.check(`day0.${ref}.send_link_opens_gmail_compose`, status === 302 && host === 'mail.google.com', `status ${status}, host ${host ?? 'none'}`);
+  sim.check(`${checkPrefix}.${ref}.send_link_opens_gmail_compose`, status === 302 && host === 'mail.google.com', `status ${status}, host ${host ?? 'none'}`);
   sim.record('step', 'new_lead.send_tapped', { lead: ref, httpStatus: status, composeHost: host });
 }
 
-async function ownerSends(sim: Simulation, tap: Day0OwnerTap): Promise<void> {
+/** The owner's mail app sends it now and HubSpot logs it (an `EMAIL` engagement, hs_timestamp now). */
+export async function ownerSends(sim: Simulation, tap: Day0OwnerTap, checkPrefix = 'day0'): Promise<void> {
   const ref = `L${tap.n}`;
   // Gmail with BCC logging on: the owner's mailbox logs everything (PLAN §13), HubSpot shows it now.
   const logged = sim.fakes.hubspot.logOwnerSend({ to: day0Submission(tap.n).email, at: sim.clock.now() });
-  sim.check(`day0.${ref}.owner_send_logged_in_hubspot`, logged !== null, logged === null ? 'not logged' : 'logged');
+  sim.check(`${checkPrefix}.${ref}.owner_send_logged_in_hubspot`, logged !== null, logged === null ? 'not logged' : 'logged');
   sim.record('step', 'new_lead.reply_sent_by_owner', { lead: ref, loggedInHubSpot: logged !== null });
 }
 

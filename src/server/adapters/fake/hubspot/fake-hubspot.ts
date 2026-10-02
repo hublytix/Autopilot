@@ -90,6 +90,10 @@ function lower(email: string): string {
   return email.trim().toLowerCase();
 }
 
+function splitIds(value: string | null | undefined): string[] {
+  return (value ?? '').split(';').map((id) => id.trim()).filter((id) => id.length > 0);
+}
+
 function splitEmails(value: string | null | undefined): string[] {
   return (value ?? '')
     .split(';')
@@ -580,6 +584,12 @@ export class FakeHubSpot implements HubSpotClient {
     for (const [name, value] of Object.entries(primary.properties)) if (value !== null) properties[name] = value;
     properties.email = primaryEmail;
     properties.hs_additional_emails = additional.size > 0 ? [...additional].join(';') : null;
+    // The ids folded into the new record, earlier merges' included (as HubSpot's hs_merged_object_ids).
+    const mergedIds = [primary, ...(secondary === undefined ? [] : [secondary])].flatMap((c) => [
+      ...splitIds(c.properties.hs_merged_object_ids),
+      c.id,
+    ]);
+    properties.hs_merged_object_ids = [...new Set(mergedIds)].join(';');
 
     const createdAtMs = Math.min(primary.createdAtMs, secondary?.createdAtMs ?? primary.createdAtMs);
     const merged = this.#newContact(properties, createdAtMs, this.#now());

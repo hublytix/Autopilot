@@ -1,5 +1,6 @@
 import 'server-only';
 import type { NotificationKind } from '@/server/domain/types';
+import { supersededSql } from './supersede';
 
 // The per-kind notification table (PLAN §8.4): each kind's dedupe key, and the SQL predicate checked
 // inside the reservation INSERT…SELECT and again in every takeover (a retry, the paired kind, the
@@ -10,9 +11,9 @@ import type { NotificationKind } from '@/server/domain/types';
 // |------------------------------------|---------------------------------------------|----------------------------------------------
 // | new_lead, needs_touch (initial)    | notify:{leadId}:initial:r{process_rev}      | lead not dismissed, stop_reason null, not is_test,
 // |                                    |                                             | account active, connection active
-// | follow_up, needs_touch (fu n)      | notify:{leadId}:fu{n}:s{followup_stream}    | the above + replied_at null, not superseded,
-// |                                    |                                             | followups_enabled
-// | reply_detected                     | reply:{leadId}:s{followup_stream}           | replied_at not null, not dismissed,
+// | follow_up, needs_touch (fu n)      | notify:{leadId}:fu{n}:s{followup_stream}    | the above + replied_at null, fu{n}_notified_at
+// |                                    |                                             | null (D-73), not superseded, followups_enabled
+// | reply_detected                     | reply:{leadId}:s{followup_stream}           | replied_at not null, not dismissed, not is_test,
 // |                                    |                                             | account and connection active
 // | inbox_test                         | inbox-test:{checkId}                        | lead is_test, account onboarding|active,
 // |                                    |                                             | connection active
@@ -80,11 +81,8 @@ const INITIAL_CONDITIONS = [
   `c.status = 'active'`,
 ] as const;
 
-/** D-44: a newer non-test lead for the same contact has already been notified. */
-const NOT_SUPERSEDED = `not exists (
-      select 1 from leads n
-       where n.account_id = l.account_id and n.hubspot_contact_id = l.hubspot_contact_id and n.id <> l.id
-         and not n.is_test and n.submitted_at > l.submitted_at and n.first_notified_at is not null)`;
+/** D-44: a newer non-test lead for the same contact has already been notified (the follow-up job's stop check uses the same SQL). */
+const NOT_SUPERSEDED = `not ${supersededSql('l')}`;
 
 const FOLLOWUPS_ENABLED = 'exists (select 1 from settings s where s.account_id = a.id and s.followups_enabled)';
 
@@ -99,17 +97,26 @@ export const NotificationPredicates = {
     (bind) =>
       leadWhere(bind, scope, INITIAL_CONDITIONS),
 
-  /** follow_up, and needs_touch for a follow-up. */
+  /**
+   * follow_up n, and needs_touch for a follow-up. Also follow-up n not emailed yet (`fu{n}_notified_at`
+   * null, D-73): an older stream's job or reservation can never send follow-up n a second time.
+   */
   followUp:
-    (scope: LeadScope): NotificationPredicate =>
+    (scope: LeadScope, n: 1 | 2): NotificationPredicate =>
     (bind) =>
-      leadWhere(bind, scope, [...INITIAL_CONDITIONS, 'l.replied_at is null', NOT_SUPERSEDED, FOLLOWUPS_ENABLED]),
+      leadWhere(bind, scope, [
+        ...INITIAL_CONDITIONS,
+        'l.replied_at is null',
+        n === 1 ? 'l.fu1_notified_at is null' : 'l.fu2_notified_at is null',
+        NOT_SUPERSEDED,
+        FOLLOWUPS_ENABLED,
+      ]),
 
   /** Reserved inside the markReplied transaction, only while follow-ups were still scheduled (D-08). */
   replyDetected:
     (scope: LeadScope): NotificationPredicate =>
     (bind) =>
-      leadWhere(bind, scope, ['l.replied_at is not null', 'l.dismissed_at is null', `a.processing_state = 'active'`, `c.status = 'active'`]),
+      leadWhere(bind, scope, ['l.replied_at is not null', 'l.dismissed_at is null', 'not l.is_test', `a.processing_state = 'active'`, `c.status = 'active'`]),
 
   /** The onboarding inbox test: `scope.leadId` is the test lead. */
   inboxTest:

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { followUpTargets } from '@/server/domain/followup-schedule';
 import { onAlert, type RaisedAlert } from '@/server/jobs/alert';
+import { STREAM_ENDED_STOP } from '@/server/services/followups/end';
 import { followUpDedupeKey, scheduleFollowUpsInTx } from '@/server/services/followups/schedule';
 import { useTestDb as setUpTestDb } from '../db/harness';
 import { createLeadsRig, followUpJobs, leadRow, seedLeadAccount, seedNewLead, ZONE, type LeadsRig } from './support';
@@ -114,6 +115,15 @@ describe('scheduleFollowUpsInTx', () => {
     const utc = followUpTargets(t0, { quietStartHour: 19, quietEndHour: 8, skipWeekends: true }, 'UTC', lead.accountId);
     expect(result).toMatchObject({ type: 'scheduled', targets: utc });
     expect(alerts).toEqual([]);
+  });
+
+  it('a schedule that cannot be computed: no rows, one alert, and the stream\'s end stored so the lead never reads "follow-ups pending" forever (D-73)', async () => {
+    const db = getDb();
+    const lead = await seeded();
+    expect(await schedule(lead, new Date(Number.NaN))).toEqual({ type: 'unschedulable' });
+    expect(await followUpJobs(db, lead.leadId)).toEqual([]);
+    expect(alerts.map((alert) => alert.code)).toEqual(['followup_schedule_failed']);
+    expect((await leadRow(db, lead.leadId)).stop_reason).toBe(STREAM_ENDED_STOP);
   });
 
   it('a lead that no longer exists gets nothing', async () => {

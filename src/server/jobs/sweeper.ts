@@ -5,6 +5,7 @@ import { log } from '@/server/obs/log';
 import type { Deps } from '@/server/ports';
 import {
   failReservation,
+  failReservationWithHooks,
   NOTIFICATION_COLUMNS,
   resumeReservation,
   toNotificationRow,
@@ -35,7 +36,9 @@ import { JOB_MAX_ATTEMPTS, type JobRow } from './types';
 //   → back to scheduled (claim count reset) and re-published;
 // - a `notifications_sent` row still `sending`, first reserved under 23 h ago and untouched for
 //   min(10 min × 2^sweeper_resumes, 2 h) → resumed through the takeover (§8.4 step 2); rows first
-//   reserved 23 h ago or more → failed with one alert each; `magic_link` rows → failed.
+//   reserved 23 h ago or more → failed with one alert each, and the kind's failure hooks run in the
+//   same transaction (a lead email's lead is never left waiting for it, D-72, D-73; a resume that
+//   ends `failed` runs them too, inside resumeReservation); `magic_link` rows → failed.
 
 export const UNPUBLISHED_GRACE_MS = 2 * 60 * 1000;
 export const MISSED_RUN_MS = 30 * 60 * 1000;
@@ -222,9 +225,15 @@ async function sweepNotifications(deps: Deps, registry: NotificationRegistry, su
     [windowStart],
   );
   for (const row of expired.map(toNotificationRow)) {
-    if (await failReservation(deps.db, row)) {
+    try {
+      // The kind's failure hooks run in the expiry's transaction: an error rolls the expiry back, so
+      // the next sweep tries again and a lead is never left waiting for this email (D-72, D-73).
+      if (!(await failReservationWithHooks(deps, row, 'expired', registry))) continue;
       summary.notificationsExpired += 1;
       raiseAlert('notification_expired', { notificationKind: row.kind, reservationId: row.id, attempts: row.sendAttempts });
+    } catch (error) {
+      summary.errors += 1;
+      log.warn('notification expiry failed', { event: 'notification.expiry_error', reservationId: row.id, code: errorCode(error) }, error);
     }
   }
 

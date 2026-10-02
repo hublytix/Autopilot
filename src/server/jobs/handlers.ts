@@ -3,6 +3,7 @@ import { registerAccountNotifications } from '@/server/services/accounts/emails'
 import { registerBaselineJobs } from '@/server/services/baseline/job';
 import { registerBriefJobs } from '@/server/services/brief/job';
 import { registerDraftingNotifications } from '@/server/services/drafting/cap';
+import { registerFollowUpJob } from '@/server/services/followups/job';
 import { registerInboxCheck } from '@/server/services/inbox-check/job';
 import { registerLeadProcessJob } from '@/server/services/leads/process';
 import { registerOnboardingNotifications } from '@/server/services/onboarding/notifications';
@@ -46,7 +47,8 @@ export type Registration = (registries: Registries) => void;
  * (owner_alert also resumes M3's settings-change alerts). M3: verify_notify, brief_generate,
  * inbox_check + the inbox_test resumer, baseline. M4: lead_process drafts and emails the lead, and
  * registerLeadProcessJob also registers the lead email resumers (new_lead, needs_touch, follow_up,
- * reply_detected); the lead_cap resumer (services/drafting).
+ * reply_detected); the lead_cap resumer (services/drafting). M5: followup + its failure path (a
+ * lead-page note) through registerFollowUpJob (services/followups).
  */
 const REGISTRATIONS: readonly Registration[] = [
   registerIntakeJobs,
@@ -57,6 +59,7 @@ const REGISTRATIONS: readonly Registration[] = [
   registerInboxCheck,
   registerBaselineJobs,
   registerDraftingNotifications,
+  registerFollowUpJob,
 ];
 
 /** Fresh registries holding every registration (the simulation's; the app uses the defaults below). */

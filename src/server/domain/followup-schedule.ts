@@ -7,8 +7,10 @@ import { QuietHoursError, shiftToAllowed, type QuietHoursSettings } from './quie
 // - Follow-up n runs `days(n)` calendar days after T0 = `first_notified_at`, in the portal's zone
 //   (so a DST change keeps the local time of day), shifted out of quiet hours and weekends:
 //   shiftToAllowed(T0.setZone(tz).plus({days})). Follow-up 1 is day 2, follow-up 2 is day 5.
-// - "Resume follow-ups" (D-42, PLAN §9.6) reschedules only the follow-ups not yet sent, at
-//   shiftToAllowed(max(T0 + n days, now + 1 h)).
+// - "Resume follow-ups" (D-42, PLAN §9.6) reschedules only the follow-ups not yet sent: the earliest
+//   at shiftToAllowed(max(T0 + n days, now + 1 h)); a later one also keeps the original gap after the
+//   one before it (fu2 − fu1 = 3 calendar days in the portal's zone), so resuming after day 5 with
+//   neither sent does not put both at now + 1 h (D-72, closing D-66's open point (1)).
 // - A target beyond the scheduler's maximum delay is returned as it is; the jobs layer hops.
 
 export const FOLLOW_UP_NUMBERS = [1, 2] as const;
@@ -56,9 +58,18 @@ export function followUpTargets(
   ];
 }
 
+function latest(times: readonly DateTime[]): DateTime {
+  return times.reduce((a, b) => (b.toMillis() > a.toMillis() ? b : a));
+}
+
 /**
- * "Resume follow-ups" (D-42): a target for each follow-up not in `sent`, at
- * shiftToAllowed(max(T0 + n days, now + 1 h)), in follow-up order.
+ * "Resume follow-ups" (D-42, D-72, D-73): a target for each follow-up not in `sent`, in follow-up order.
+ * The earliest at shiftToAllowed(max(T0 + n days, now + 1 h)); each later one at
+ * shiftToAllowed(max(T0 + n days, now + 1 h, the previous follow-up + the original gap)), the gap
+ * counted from the previous follow-up's shifted target, or, when that one is in `sent`, from when it
+ * reached the owner or was first reserved while its email is still being sent (`sentAt`, D-73), so two
+ * follow-ups are never closer than 3 days. Resumed before day 2 with no shift, both keep their original
+ * days (T0 + 2 + 3 = T0 + 5).
  */
 export function resumeTargets(
   firstNotifiedAt: Date,
@@ -67,13 +78,22 @@ export function resumeTargets(
   settings: QuietHoursSettings,
   zone: string,
   accountId: string,
+  sentAt: Readonly<Partial<Record<FollowUpNumber, Date>>> = {},
 ): FollowUpTarget[] {
   const earliest = zoned(new Date(now.getTime() + RESUME_MIN_DELAY_MS), zone);
   const targets: FollowUpTarget[] = [];
+  let previous: { readonly n: FollowUpNumber; readonly at: DateTime } | null = null;
   for (const n of FOLLOW_UP_NUMBERS) {
-    if (sent.includes(n)) continue;
-    const due = followUpDueAt(firstNotifiedAt, n, zone);
-    targets.push(target(n, due.toMillis() >= earliest.toMillis() ? due : earliest, settings, accountId));
+    if (sent.includes(n)) {
+      const at = sentAt[n];
+      previous = at === undefined ? null : { n, at: zoned(at, zone) };
+      continue;
+    }
+    const candidates = [followUpDueAt(firstNotifiedAt, n, zone), earliest];
+    if (previous !== null) candidates.push(previous.at.plus({ days: FOLLOW_UP_DAYS[n] - FOLLOW_UP_DAYS[previous.n] }));
+    const next = target(n, latest(candidates), settings, accountId);
+    targets.push(next);
+    previous = { n, at: zoned(next.runAt, zone) };
   }
   return targets;
 }
