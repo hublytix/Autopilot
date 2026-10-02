@@ -329,6 +329,27 @@ describe('scrubEvent() (beforeSend)', () => {
     ]);
   });
 
+  // [AI-SDK-LOGGING-PRIVACY]: shapes that would carry model output or request text if an LLM error
+  // ever reached Sentry. The adapter never forwards them; the scrubber must still drop them.
+  it.each([
+    ['a JSON.parse SyntaxError over model output', `Unexpected token 'S', "Sorry, I c"... is not valid JSON`],
+    ['a JSON.parse SyntaxError quoting lead text', `Unexpected token 'F', "${LEAD_MESSAGE.slice(0, 10)}"... is not valid JSON`],
+    ['an Anthropic SDK APIError message', '400 messages.0.content.0.text: FIXTURE_LEAD_MESSAGE_42 is too long'],
+    ['an Anthropic SDK error body', `400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.0: ${DRAFT_BODY}"}}`],
+  ])('drops %s from exception values and breadcrumbs', (_name, value) => {
+    const scrubbed = scrubEvent({
+      type: undefined,
+      exception: { values: [{ type: 'SyntaxError', value }] },
+      breadcrumbs: [{ category: 'job', message: value }],
+    });
+    expect(scrubbed.exception?.values?.[0]?.value).toBe(REDACTED);
+    expect(scrubbed.breadcrumbs?.[0]?.message).toBe(REDACTED);
+    const serialised = JSON.stringify(scrubbed);
+    for (const marker of ['Sorry, I c', 'FIXTURE_LEAD_MESSAGE_42', 'FIXTURE_DRAFT_BODY_77', LEAD_MESSAGE.slice(0, 10)]) {
+      expect(serialised).not.toContain(marker);
+    }
+  });
+
   it.each([
     ['a HubSpot refresh token', FAKE_HUBSPOT_REFRESH_TOKEN],
     ['a 56-character hex hash', 'd14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f'],

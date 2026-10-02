@@ -5,10 +5,11 @@ import { Settings } from 'luxon';
 import { SystemClock } from '@/server/adapters/live/system-clock';
 import { ConfigError } from '@/server/domain/errors';
 import { getEnv, type AppMode, type Env } from '@/server/env';
-import type { FakeAdapters } from '@/server/adapters/fake';
+import type { FakeAdapters, FakeDeps, PersistedFakeName } from '@/server/adapters/fake';
 import type { DevClock } from '@/server/adapters/fake/dev-clock';
 import type { Db } from '@/server/db';
 import type { AuthProvider, Billing, Clock, Deps, HubSpotClient, LLM, Mailer, Scheduler, WebFetcher } from '@/server/ports';
+import type { FakeStatePersistence } from '@/server/services/fake-state';
 
 // The Deps factory and its lazy process-wide singleton (PLAN §3, §4, D-29). Nothing opens at import
 // time: the first getDeps() parses the environment, picks the adapters for APP_MODE and, in fake
@@ -92,31 +93,57 @@ async function pgliteDataDir(fakeDbDir: string): Promise<string> {
 }
 
 async function buildFakeContainer(env: Env, baseClock: Clock): Promise<Container> {
-  const [{ createPgliteDb }, { migrate }, { createFakeDeps }, { DevClock }] = await Promise.all([
-    import('@/server/db/pglite'),
-    import('@/server/db/migrate'),
-    import('@/server/adapters/fake'),
-    import('@/server/adapters/fake/dev-clock'),
-  ]);
+  const [{ createPgliteDb }, { migrate }, { createFakeDeps }, { DevClock }, { startFakeStatePersistence }, { createSchedulerBridge }] =
+    await Promise.all([
+      import('@/server/db/pglite'),
+      import('@/server/db/migrate'),
+      import('@/server/adapters/fake'),
+      import('@/server/adapters/fake/dev-clock'),
+      import('@/server/services/fake-state'),
+      import('@/server/jobs/bridge'),
+    ]);
   const db = createPgliteDb({ dataDir: await pgliteDataDir(env.FAKE_DB_DIR) });
+  // The fake portal (whose OAuth tokens hubspot_connections stores) and the fake subscriptions are
+  // restored from fake.state and saved back after every change (D-29, D-53).
+  let persistence: FakeStatePersistence<PersistedFakeName> | undefined;
   let clock: DevClock;
+  let built: FakeDeps;
+  // The FakeScheduler delivers due jobs through the same dispatcher /api/jobs/run and
+  // /api/jobs/failed use (PLAN §4, §8.3). The bridge reads the Deps at delivery time.
+  const box: { deps?: Deps | undefined } = {};
+  const bridge = createSchedulerBridge(() => {
+    if (box.deps === undefined) throw new ConfigError('container_not_ready');
+    return box.deps;
+  });
   try {
     await migrate(db);
     clock = await DevClock.load(db, baseClock);
+    built = createFakeDeps({
+      env,
+      db,
+      clock,
+      dispatch: (delivery) => bridge.dispatch(delivery),
+      onJobFailure: (failure) => bridge.onFailure(failure),
+      onStateChange: (name) => persistence?.markChanged(name),
+    });
+    box.deps = built.deps;
+    persistence = await startFakeStatePersistence<PersistedFakeName>({
+      db,
+      sources: { hubspot: built.fakes.hubspot, billing: built.fakes.billing },
+    });
   } catch (error) {
     await db.close().catch(() => undefined);
     throw error;
   }
-  // The fake portal and billing state still live in memory; persisting their snapshots in
-  // fake.state arrives with the OAuth token storage in M2 (PLAN §15 M2).
-  const { deps, fakes } = createFakeDeps({ env, db, clock });
+  const saved = persistence;
   const restoreLuxon = driveLuxon(clock);
   return {
     mode: 'fake',
-    deps,
-    fakes,
+    deps: built.deps,
+    fakes: built.fakes,
     devClock: clock,
     close: async () => {
+      await saved.close();
       restoreLuxon();
       await db.close();
     },
@@ -143,22 +170,62 @@ function liveAdapterNotBuilt<T extends object>(): T {
   });
 }
 
+/** The live adapters built so far (PLAN §15): M2 brings HubSpot, the LLM, the mailer and the scheduler. */
+export interface LiveAdapters {
+  hubspot: HubSpotClient;
+  llm: LLM;
+  mailer: Mailer;
+  scheduler: Scheduler;
+}
+
+/**
+ * Builds the live adapters from the environment. The SDK modules (Anthropic, Resend, QStash) are
+ * imported here, on first use, so fake mode never loads them. Constructing them sends nothing.
+ */
+export async function buildLiveAdapters(env: Env, clock: Clock): Promise<LiveAdapters> {
+  const [{ HubSpotHttpClient }, { AnthropicLLM }, { modelParamsConfig }, { ResendMailer }, { QstashScheduler }] = await Promise.all([
+    import('@/server/adapters/live/hubspot'),
+    import('@/server/adapters/live/anthropic-llm'),
+    import('@/server/ai/model-params'),
+    import('@/server/adapters/live/resend-mailer'),
+    import('@/server/adapters/live/qstash-scheduler'),
+  ]);
+  return {
+    hubspot: new HubSpotHttpClient({
+      clientId: env.HUBSPOT_CLIENT_ID,
+      clientSecret: env.HUBSPOT_CLIENT_SECRET,
+      apiVersion: env.HUBSPOT_API_VERSION,
+    }),
+    llm: new AnthropicLLM({
+      apiKey: env.ANTHROPIC_API_KEY,
+      models: { draft: env.ANTHROPIC_MODEL_DRAFT, fast: env.ANTHROPIC_MODEL_FAST },
+      params: modelParamsConfig(env),
+      clock,
+    }),
+    mailer: new ResendMailer({ apiKey: env.RESEND_API_KEY, from: env.EMAIL_FROM }),
+    scheduler: new QstashScheduler({ token: env.QSTASH_TOKEN, baseUrl: env.QSTASH_URL, appUrl: env.APP_URL, clock }),
+  };
+}
+
 export interface LiveDepsOptions {
   env: Env;
   db: Db;
   clock?: Clock | undefined;
+  /** From buildLiveAdapters; a port left out throws ConfigError('live_adapter_not_built') when used. */
+  adapters?: Partial<LiveAdapters> | undefined;
 }
 
-/** Live Deps: SystemClock and Postgres.js; the HubSpot, LLM, mail, jobs, billing, fetch and auth adapters come in M2+. */
+/** Live Deps: SystemClock, Postgres.js and the live adapters given; billing, fetch and auth come in M3+. */
 export function createLiveDeps(options: LiveDepsOptions): Deps {
+  const adapters = options.adapters ?? {};
   return {
     env: options.env,
     db: options.db,
     clock: options.clock ?? new SystemClock(),
-    hubspot: liveAdapterNotBuilt<HubSpotClient>(),
-    llm: liveAdapterNotBuilt<LLM>(),
-    mailer: liveAdapterNotBuilt<Mailer>(),
-    scheduler: liveAdapterNotBuilt<Scheduler>(),
+    hubspot: adapters.hubspot ?? liveAdapterNotBuilt<HubSpotClient>(),
+    llm: adapters.llm ?? liveAdapterNotBuilt<LLM>(),
+    mailer: adapters.mailer ?? liveAdapterNotBuilt<Mailer>(),
+    scheduler: adapters.scheduler ?? liveAdapterNotBuilt<Scheduler>(),
     billing: liveAdapterNotBuilt<Billing>(),
     webFetcher: liveAdapterNotBuilt<WebFetcher>(),
     auth: liveAdapterNotBuilt<AuthProvider>(),
@@ -167,11 +234,12 @@ export function createLiveDeps(options: LiveDepsOptions): Deps {
 
 async function buildLiveContainer(env: Env, clock: Clock): Promise<Container> {
   const { createPostgresDb } = await import('@/server/db/postgres');
+  const adapters = await buildLiveAdapters(env, clock);
   const db = createPostgresDb(env.DATABASE_URL);
   const restoreLuxon = driveLuxon(clock);
   return {
     mode: 'live',
-    deps: createLiveDeps({ env, db, clock }),
+    deps: createLiveDeps({ env, db, clock, adapters }),
     fakes: null,
     devClock: null,
     close: async () => {

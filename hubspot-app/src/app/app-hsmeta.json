@@ -1,0 +1,26 @@
+{
+  "uid": "hublytix_autopilot",
+  "type": "app",
+  "config": {
+    "name": "Hublytix Autopilot",
+    "description": "Drafts replies and follow-ups for new HubSpot form leads; you send them from your own mail app. Read-only: Autopilot never changes your HubSpot data.",
+    "distribution": "marketplace",
+    "auth": {
+      "type": "oauth",
+      "redirectUrls": ["https://autopilot.example.com/api/hubspot/oauth/callback"],
+      "requiredScopes": ["oauth", "crm.objects.contacts.read", "forms", "sales-email-read"],
+      "optionalScopes": [],
+      "conditionallyRequiredScopes": []
+    },
+    "permittedUrls": {
+      "fetch": [],
+      "iframe": [],
+      "img": []
+    },
+    "support": {
+      "supportEmail": "support@autopilot.example.com",
+      "documentationUrl": "https://autopilot.example.com/privacy",
+      "supportUrl": "https://autopilot.example.com/"
+    }
+  }
+}

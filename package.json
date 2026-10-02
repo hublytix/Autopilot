@@ -15,7 +15,8 @@
     "test": "vitest run",
     "simulate": "tsx --tsconfig tsconfig.scripts.json scripts/simulate.ts",
     "smoke": "tsx --tsconfig tsconfig.scripts.json scripts/smoke.ts",
-    "check:bundle": "tsx --tsconfig tsconfig.scripts.json scripts/check-bundle.ts"
+    "check:bundle": "tsx --tsconfig tsconfig.scripts.json scripts/check-bundle.ts",
+    "qstash:schedules": "tsx --tsconfig tsconfig.scripts.json scripts/qstash-schedules.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.131.0",

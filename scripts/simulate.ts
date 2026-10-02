@@ -4,7 +4,8 @@
 //
 // SIMULATE_SYSTEM_TIME (e.g. 2030) is recorded in the summary. The simulation never reads the wall
 // clock, so the output must be the same whatever the system time is; the Vitest suite proves that
-// by running it with the system time faked to 2030 (scripts/simulation/run.test.ts).
+// by running every stage with the system time faked to 2030 (scripts/simulation/run.test.ts).
+// Stages so far: boot (M1), seed + Day 0 intake (M2); see scripts/simulation/stages.ts.
 import path from 'node:path';
 import { runSimulation, SUMMARY_FILE } from './simulation/run';
 

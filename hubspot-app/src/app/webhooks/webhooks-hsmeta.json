@@ -1,0 +1,15 @@
+{
+  "uid": "autopilot_webhooks",
+  "type": "webhooks",
+  "config": {
+    "settings": {
+      "targetUrl": "https://autopilot.example.com/api/hubspot/webhooks",
+      "maxConcurrentRequests": 10
+    },
+    "subscriptions": {
+      "crmObjects": [{ "subscriptionType": "object.creation", "objectType": "contact", "active": true }],
+      "legacyCrmObjects": [],
+      "hubEvents": [{ "subscriptionType": "contact.privacyDeletion", "active": true }]
+    }
+  }
+}

@@ -6,10 +6,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConfigError } from '@/server/domain/errors';
 import { EnvError, FAKE_ENV, parseEnv, type Env } from '@/server/env';
 import type { Db } from '@/server/db';
+import type { Deps } from '@/server/ports';
 import { FakeClock } from '@/server/adapters/fake/clock';
 import { CLOCK_OFFSET_KEY, DevClock } from '@/server/adapters/fake/dev-clock';
 import { SystemClock } from '@/server/adapters/live/system-clock';
-import { buildContainer, createLiveDeps, getContainer, getDeps, resetContainer } from './container';
+import { AnthropicLLM } from '@/server/adapters/live/anthropic-llm';
+import { HubSpotHttpClient } from '@/server/adapters/live/hubspot';
+import { QstashScheduler } from '@/server/adapters/live/qstash-scheduler';
+import { ResendMailer } from '@/server/adapters/live/resend-mailer';
+import { insertJob, publishJobs } from '@/server/jobs';
+import { seedAccount } from '@/server/jobs/testing';
+import { buildContainer, buildLiveAdapters, createLiveDeps, getContainer, getDeps, resetContainer } from './container';
 
 const store = globalThis as typeof globalThis & { __autopilot?: unknown };
 
@@ -108,6 +115,80 @@ describe('container', () => {
     }
   });
 
+  it('fake mode: two boots on one FAKE_DB_DIR see the same portal tokens and subscriptions', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'autopilot-container-'));
+    const base = new FakeClock(new Date('2026-10-06T13:00:00.000Z'));
+    const env = parseEnv({ APP_MODE: 'fake', FAKE_DB_DIR: dir });
+    try {
+      const first = await buildContainer(env, { baseClock: base });
+      let tokens: Awaited<ReturnType<Deps['hubspot']['exchangeCode']>>;
+      let subscriptionId: string;
+      try {
+        const code = first.fakes?.hubspot.createAuthCode({ redirectUri: env.HUBSPOT_REDIRECT_URI }) ?? '';
+        tokens = await first.deps.hubspot.exchangeCode(code, env.HUBSPOT_REDIRECT_URI);
+        subscriptionId = (
+          await first.deps.billing.createSubscription({
+            planId: env.RAZORPAY_PLAN_ID,
+            totalCount: 120,
+            quantity: 1,
+            customerNotify: false,
+            expireBy: new Date('2026-10-07T13:00:00.000Z'),
+            notes: { autopilot_account_id: 'acct-1' },
+          })
+        ).id;
+      } finally {
+        // Closing flushes the pending (debounced) snapshot writes.
+        await first.close();
+      }
+
+      base.advance({ minutes: 5 });
+      const second = await buildContainer(env, { baseClock: base });
+      try {
+        expect(second.fakes?.hubspot.isInstalled()).toBe(true);
+        await expect(second.deps.hubspot.accountDetails(tokens.accessToken)).resolves.toMatchObject({ portalId: '1234567' });
+        await expect(second.deps.hubspot.refresh(tokens.refreshToken)).resolves.toMatchObject({ refreshToken: tokens.refreshToken });
+        await expect(second.deps.billing.fetchSubscription(subscriptionId)).resolves.toMatchObject({ id: subscriptionId, status: 'created' });
+        expect(
+          (await second.deps.db.query<{ key: string }>('select key from fake.state order by key')).map((row) => row.key),
+        ).toEqual(['billing_snapshot', 'hubspot_snapshot']);
+      } finally {
+        await second.close();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fake mode: the fake scheduler delivers jobs to the registered handlers, as /api/jobs/run would', async () => {
+    const env = parseEnv({ APP_MODE: 'fake', FAKE_DB_DIR: 'memory://' });
+    const container = await buildContainer(env, { baseClock: new FakeClock(new Date('2026-10-06T13:00:00.000Z')) });
+    try {
+      const { deps } = container;
+      const now = deps.clock.now();
+      // A paused account: the portal_poll handler (registered by the intake service) skips it.
+      const accountId = await seedAccount(deps.db, { now, processingState: 'paused' });
+      const row = await deps.db.tx((tx) => insertJob(tx, { kind: 'portal_poll', accountId, dedupeKey: `poll:${accountId}:test`, runAt: now, now }));
+      expect(row).not.toBeNull();
+      await publishJobs(deps, row === null ? [] : [row]);
+      expect(await container.fakes?.scheduler.runDue()).toBe(1);
+      expect(await deps.db.query('select kind, status from scheduled_jobs')).toEqual([{ kind: 'portal_poll', status: 'skipped' }]);
+    } finally {
+      await container.close();
+    }
+  });
+
+  it('fake mode: the fake LLM asserts every request against the env model settings', async () => {
+    const env = parseEnv({ APP_MODE: 'fake', FAKE_DB_DIR: 'memory://', ANTHROPIC_MODEL_FAST: 'claude-unknown-model' });
+    const container = await buildContainer(env, { baseClock: new FakeClock(new Date('2026-10-06T13:00:00.000Z')) });
+    try {
+      await expect(
+        container.deps.llm.classify({ message: 'Need a quote', formName: 'Contact us', firstName: null, company: null }),
+      ).rejects.toThrow('anthropic_model_not_supported');
+    } finally {
+      await container.close();
+    }
+  });
+
   it('fake mode: the dev clock refuses to move backwards through advance()', async () => {
     const env = parseEnv({ APP_MODE: 'fake', FAKE_DB_DIR: 'memory://' });
     const container = await buildContainer(env, { baseClock: new FakeClock(new Date('2026-10-06T13:00:00.000Z')) });
@@ -140,6 +221,21 @@ describe('container', () => {
     vi.stubEnv('APP_MODE', 'staging');
     await expect(getContainer()).rejects.toBeInstanceOf(EnvError);
     expect(store.__autopilot).toBeUndefined();
+  });
+
+  it('live mode: HubSpot, the LLM, the mailer and the scheduler use their live adapters (built without any network call)', async () => {
+    const env = parseEnv({ APP_MODE: 'fake' });
+    const clock = new FakeClock(new Date('2026-10-06T13:00:00.000Z'));
+    const adapters = await buildLiveAdapters(env, clock);
+    expect(adapters.hubspot).toBeInstanceOf(HubSpotHttpClient);
+    expect(adapters.llm).toBeInstanceOf(AnthropicLLM);
+    expect(adapters.mailer).toBeInstanceOf(ResendMailer);
+    expect(adapters.scheduler).toBeInstanceOf(QstashScheduler);
+    const db = { close: () => Promise.resolve() } as unknown as Db;
+    const deps = createLiveDeps({ env, db, clock, adapters });
+    expect(deps.hubspot).toBe(adapters.hubspot);
+    expect(deps.scheduler).toBe(adapters.scheduler);
+    expect(() => deps.billing.fetchPlan('plan_x')).toThrow('live_adapter_not_built');
   });
 
   it('live mode: ports without a live adapter throw ConfigError live_adapter_not_built when used', async () => {

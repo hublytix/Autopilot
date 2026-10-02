@@ -4,6 +4,7 @@ import type { FakeClock } from '@/server/adapters/fake/clock';
 import type { FakeAdapters } from '@/server/adapters/fake';
 import type { PgliteDb } from '@/server/db/pglite';
 import type { Deps } from '@/server/ports';
+import type { TimeTravel } from './engine';
 
 export type Milestone = 'M1' | 'M2' | 'M3' | 'M4' | 'M5' | 'M6' | 'M7' | 'M8';
 
@@ -11,14 +12,20 @@ export type Milestone = 'M1' | 'M2' | 'M3' | 'M4' | 'M5' | 'M6' | 'M7' | 'M8';
 export type DetailValue = string | number | boolean | null | readonly string[];
 export type Detail = Readonly<Record<string, DetailValue>>;
 
-/** One step, tick or intake trigger, at the simulated time it happened. */
+/**
+ * One step, tick, intake trigger or job delivery, at the simulated time it happened.
+ * - `step`: something the scenario did (an install, an owner action, a form submission);
+ * - `tick`: a periodic trigger (PLAN §8.1) and what it did;
+ * - `intake`: a webhook delivery, and every lead created (with the trigger that found it);
+ * - `job`: one delivery of a job to runJob (as QStash would call /api/jobs/run) or a failure callback.
+ */
 export interface TimelineEntry {
   /** ISO-8601 UTC, from the FakeClock. */
   at: string;
   /** The same instant in the portal's time zone, for reading (`ccc yyyy-LL-dd HH:mm:ss`). */
   local: string;
   stage: string;
-  kind: 'step' | 'tick' | 'intake';
+  kind: 'step' | 'tick' | 'intake' | 'job';
   name: string;
   detail?: Detail;
 }
@@ -45,8 +52,10 @@ export interface EmailSummary {
 
 /**
  * A lead as summary.json shows it. No database ids: leads.id is gen_random_uuid(), so it would make
- * summary.json differ from run to run. `ref` is a stable label (`L1`, `L2`, …) in the order
- * (submitted_at, hubspot_contact_id, form_id, is_test); emails name their lead by the same ref.
+ * summary.json differ from run to run. `ref` is a stable label: the scenario's own number for the
+ * submissions it declares (`L5` is submission #5, whenever it arrives), then `L{n}` for any other
+ * lead in the order (submitted_at, hubspot_contact_id, form_id, is_test). Emails and timeline
+ * entries name their lead by the same ref.
  */
 export interface LeadSummary {
   ref: string;
@@ -85,6 +94,15 @@ export interface SimulationSummary {
   ok: boolean;
 }
 
+/** What the stages share about the scenario's account (set by the seed / onboarding stage). */
+export interface ScenarioState {
+  accountId: string | null;
+  /** The bound owner's login email. */
+  ownerEmail: string | null;
+  /** When onboarding completed: the intake floors (PLAN §13 "floors equal the onboarding-complete time"). */
+  onboardingCompletedAt: Date | null;
+}
+
 /** What every stage works with. */
 export interface Simulation {
   readonly clock: FakeClock;
@@ -94,6 +112,13 @@ export interface Simulation {
   /** The portal's IANA time zone (the fixture's `America/New_York`). */
   readonly timeZone: string;
   readonly outboxDir: string;
+  /** Time travel: `travel.at(time, name, fn)` schedules an external event, `travel.advanceTo(t)` runs everything up to t. */
+  readonly travel: TimeTravel;
+  readonly scenario: ScenarioState;
+  /** The local time `iso` (e.g. `2026-10-06T10:00`) in the portal's time zone, as an instant. */
+  local(iso: string): Date;
+  /** Names the lead a scenario submission will create (`L1` for #1): by its contact and submission time. */
+  declareLead(ref: string, lead: { contactId: string; submittedAt: Date }): void;
   /** Records a timeline entry at the current simulated time. */
   record(kind: TimelineEntry['kind'], name: string, detail?: Detail): void;
   /** Records a check result; any failed check makes the run fail (exit 1). */

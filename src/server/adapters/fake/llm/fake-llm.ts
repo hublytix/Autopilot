@@ -1,4 +1,5 @@
 import 'server-only';
+import { assertValidModelParams, buildModelParams, DEFAULT_MODEL_PARAMS_CONFIG, type ModelParamsConfig } from '@/server/ai/model-params';
 import type { LlmFailureKind, RefusalCategory } from '@/server/domain/types';
 import type {
   BriefDraft,
@@ -88,12 +89,16 @@ export interface FakeLlmOptions {
   models?: { draft?: string | undefined; fast?: string | undefined } | undefined;
   /**
    * ── M2 HOOK: buildModelParams ──────────────────────────────────────────────────────────────────
-   * Called with every request before the fake answers. M2 wires it to assert that
-   * `buildModelParams(request)` yields valid parameters for `request.model` (PLAN §4: "asserts each
-   * request's parameters are valid for its model"). A throw propagates to the caller on purpose: it
-   * is a test assertion, not an LLM outcome.
+   * Every request is checked before the fake answers: `buildModelParams(request)` must yield
+   * parameters `validateModelParams` accepts for `request.model` (PLAN §4: "asserts each request's
+   * parameters are valid for its model"); an unsupported model or an invalid combination (e.g.
+   * `between_tools` at effort `max`) throws. This extra hook then runs too (tests record requests
+   * with it). A throw from either propagates to the caller on purpose: it is a test assertion, not
+   * an LLM outcome.
    */
   assertRequest?: ((request: FakeLlmRequest) => void) | undefined;
+  /** The env settings `buildModelParams` reads (`modelParamsConfig(env)`); default the PLAN §14 values. */
+  modelParams?: ModelParamsConfig | undefined;
   /** Receives the simulated duration of a slow `generateBrief`, e.g. `(ms) => clock.advance(ms)`. */
   elapse?: ((ms: number) => void) | undefined;
   /** Recorded calls kept (oldest dropped first); default 1000. */
@@ -124,6 +129,26 @@ function draftMaxTokens(previous: readonly DraftRetryCode[]): number {
   return previous.includes('max_tokens') ? 2048 : 1024;
 }
 
+/**
+ * M2 HOOK: what the live adapter would send for `request`, checked against the model's rules.
+ * The brief's 0-based delivery index becomes the 1-based attempt; a draft with previous error codes
+ * is the retry (attempt 2), with the larger budget after `max_tokens`.
+ */
+export function assertFakeRequestParams(request: FakeLlmRequest, config: ModelParamsConfig = DEFAULT_MODEL_PARAMS_CONFIG): void {
+  const previous = request.previousErrorCodes ?? [];
+  const built = buildModelParams(
+    {
+      model: request.model,
+      purpose: request.purpose,
+      attempt: request.purpose === 'brief' ? (request.attempt ?? 0) + 1 : previous.length > 0 ? 2 : 1,
+      remainingMs: request.timeoutMs,
+      afterMaxTokens: previous.includes('max_tokens'),
+    },
+    config,
+  );
+  assertValidModelParams(request.model, built.params);
+}
+
 function untilAborted(signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
   return new Promise((resolve) => {
@@ -140,6 +165,7 @@ function untilAborted(signal: AbortSignal): Promise<void> {
 export class FakeLLM implements LLM {
   readonly #models: { draft: string; fast: string };
   readonly #assertRequest: ((request: FakeLlmRequest) => void) | undefined;
+  readonly #modelParams: ModelParamsConfig;
   readonly #elapse: ((ms: number) => void) | undefined;
   readonly #maxRecorded: number;
   readonly #faults: QueuedFault[] = [];
@@ -153,6 +179,7 @@ export class FakeLLM implements LLM {
       fast: options.models?.fast ?? FAKE_LLM_DEFAULT_MODELS.fast,
     };
     this.#assertRequest = options.assertRequest;
+    this.#modelParams = options.modelParams ?? DEFAULT_MODEL_PARAMS_CONFIG;
     this.#elapse = options.elapse;
     this.#maxRecorded = options.maxRecordedCalls ?? 1000;
   }
@@ -243,7 +270,8 @@ export class FakeLLM implements LLM {
   }
 
   async #run<T>(spec: RunSpec<T>): Promise<LlmResult<T>> {
-    // M2 HOOK: buildModelParams validity is asserted here (see FakeLlmOptions.assertRequest).
+    // M2 HOOK: buildModelParams validity is asserted on every call (see FakeLlmOptions.assertRequest).
+    assertFakeRequestParams(spec.request, this.#modelParams);
     this.#assertRequest?.(spec.request);
     const model = spec.request.model;
     if (spec.signal?.aborted === true) {

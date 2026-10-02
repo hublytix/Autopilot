@@ -19,6 +19,14 @@ describe('file layout', () => {
     'src/app/global-error.tsx',
     'src/shared/observability/sentry-options.ts',
     'vercel.json',
+    // M2 routes (PLAN §7.3, §7.6)
+    'src/app/api/cron/poll/route.ts',
+    'src/app/api/hubspot/webhooks/route.ts',
+    'src/app/api/hubspot/install/route.ts',
+    'src/app/api/hubspot/oauth/callback/route.ts',
+    'src/app/api/jobs/run/route.ts',
+    'src/app/api/jobs/failed/route.ts',
+    'src/app/dev/fake-hubspot/authorize/page.tsx',
   ])('has %s', (file) => {
     expect(exists(file)).toBe(true);
   });
@@ -44,8 +52,8 @@ describe('file layout', () => {
     expect(exists(file)).toBe(false);
   });
 
-  // PLAN §8.1: the three periodic triggers (UTC), declared for Vercel Pro. The route handlers arrive
-  // with M2 (poll), M6 (weekly report) and M7 (daily); add their files to the list above then.
+  // PLAN §8.1: the three periodic triggers (UTC), declared for Vercel Pro. The poll route arrived in
+  // M2 (listed above); the weekly report (M6) and daily (M7) routes join the list when they land.
   it('vercel.json declares exactly the PLAN §8.1 cron schedules', () => {
     const config = JSON.parse(readFileSync(path.join(root, 'vercel.json'), 'utf8')) as { crons?: unknown };
     expect(config.crons).toEqual([

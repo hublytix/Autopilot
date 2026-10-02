@@ -371,7 +371,8 @@ create table public.scheduled_jobs (
     'privacy_delete', 'account_daily'
   )),
   seq integer not null default 0,
-  -- {ENV_NAMESPACE}:… (PLAN §8.2); re-publishes append :h{hops} to the QStash dedupe id only
+  -- the PLAN §8.2 key without the {ENV_NAMESPACE}: prefix, which only the QStash dedupe id carries
+  -- (D-54); re-publishes append :h{hops} to the QStash dedupe id only
   dedupe_key text not null,
   -- ids only, never content
   payload jsonb not null default '{}',

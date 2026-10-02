@@ -42,7 +42,15 @@ function liveSource(overrides: Record<string, string | undefined> = {}): EnvSour
 }
 
 /** Variables env.ts reads but never asks anyone to set (they are switches live mode refuses). */
-const READ_ONLY: readonly string[] = ['VERCEL_ENV', 'QSTASH_DEV', 'QSTASH_REGION', 'SENTRY_TRACES_SAMPLE_RATE', 'SENTRY_SPOTLIGHT', 'SENTRY_DEBUG'];
+const READ_ONLY: readonly string[] = [
+  'VERCEL_ENV',
+  'QSTASH_DEV',
+  'QSTASH_REGION',
+  'SENTRY_TRACES_SAMPLE_RATE',
+  'SENTRY_SPOTLIGHT',
+  'SENTRY_DEBUG',
+  'ANTHROPIC_CUSTOM_HEADERS',
+];
 
 function issuesOf(source: EnvSource): readonly string[] {
   try {
@@ -192,6 +200,13 @@ describe('env.ts (PLAN §14, D-29, D-51)', () => {
       expect(issuesOf({ APP_MODE: 'fake', TOKEN_ENCRYPTION_KEY: 'short' })).toContainEqual(
         'TOKEN_ENCRYPTION_KEY: must be base64 for exactly 32 bytes',
       );
+    });
+
+    it.each(['xhigh', 'max'])('refuses between_tools thinking at draft effort %s in both modes (the API answers 400)', (effort) => {
+      const expected = 'ANTHROPIC_DRAFT_EFFORT: xhigh and max need ANTHROPIC_DRAFT_THINKING=adaptive (between_tools allows low, medium or high)';
+      expect(issuesOf({ APP_MODE: 'fake', ANTHROPIC_DRAFT_EFFORT: effort })).toEqual([expected]);
+      expect(issuesOf(liveSource({ ANTHROPIC_DRAFT_EFFORT: effort }))).toEqual([expected]);
+      expect(issuesOf({ APP_MODE: 'fake', ANTHROPIC_DRAFT_EFFORT: effort, ANTHROPIC_DRAFT_THINKING: 'adaptive' })).toEqual([]);
     });
 
     it.each(['production', 'preview'])('is refused on Vercel %s', (vercelEnv) => {
@@ -355,6 +370,13 @@ describe('env.ts (PLAN §14, D-29, D-51)', () => {
       ]);
       expect(parseEnv(liveSource({ US_EAST_1_QSTASH_TOKEN: '' })).APP_MODE).toBe('live');
       expect(parseEnv({ APP_MODE: 'fake', QSTASH_REGION: 'US_EAST_1' }).APP_MODE).toBe('fake');
+    });
+
+    it('refuses ANTHROPIC_CUSTOM_HEADERS, which the Anthropic SDK would add to every request', () => {
+      expect(issuesOf(liveSource({ ANTHROPIC_CUSTOM_HEADERS: 'X-Debug: 1' }))).toEqual([
+        'ANTHROPIC_CUSTOM_HEADERS: must be unset in live mode (the Anthropic SDK would add it to every request)',
+      ]);
+      expect(parseEnv({ APP_MODE: 'fake', ANTHROPIC_CUSTOM_HEADERS: 'X-Debug: 1' }).APP_MODE).toBe('fake');
     });
 
     it('refuses SENTRY_TRACES_SAMPLE_RATE, SENTRY_SPOTLIGHT and SENTRY_DEBUG (errors-only, no sidecar, no SDK debug output)', () => {

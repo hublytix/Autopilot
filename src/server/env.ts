@@ -234,6 +234,8 @@ const envSchema = z.object({
   SENTRY_TRACES_SAMPLE_RATE: z.string().optional(),
   SENTRY_SPOTLIGHT: z.string().optional(),
   SENTRY_DEBUG: z.string().optional(),
+  // The Anthropic SDK adds these lines as request headers to every call (no client option turns it off).
+  ANTHROPIC_CUSTOM_HEADERS: z.string().optional(),
 });
 
 export type Env = Readonly<z.output<typeof envSchema>>;
@@ -351,6 +353,9 @@ function modeIssues(mode: AppMode, raw: Record<string, string | undefined>, sour
   }
   if (raw.SENTRY_SPOTLIGHT !== undefined) issues.push('SENTRY_SPOTLIGHT: must be unset in live mode (it forwards every event to a sidecar)');
   if (raw.SENTRY_DEBUG !== undefined) issues.push('SENTRY_DEBUG: must be unset in live mode');
+  if (raw.ANTHROPIC_CUSTOM_HEADERS !== undefined) {
+    issues.push('ANTHROPIC_CUSTOM_HEADERS: must be unset in live mode (the Anthropic SDK would add it to every request)');
+  }
   for (const name of ['QSTASH_CURRENT_SIGNING_KEY', 'QSTASH_NEXT_SIGNING_KEY'] as const) {
     const value = raw[name];
     if (value !== undefined && QSTASH_DEV_SIGNING_KEYS.has(value)) issues.push(`${name}: the public QStash dev-server key is not allowed in live mode`);
@@ -378,6 +383,10 @@ function crossIssues(env: z.output<typeof envSchema>): string[] {
   }
   if (env.RAZORPAY_WEBHOOK_SECRET_PREVIOUS !== undefined && env.RAZORPAY_WEBHOOK_SECRET_PREVIOUS === env.RAZORPAY_WEBHOOK_SECRET) {
     issues.push('RAZORPAY_WEBHOOK_SECRET_PREVIOUS: must differ from RAZORPAY_WEBHOOK_SECRET');
+  }
+  // The API answers 400 for this pair [AI-SONNET55-REQUEST]: refuse it at boot, not at the first draft.
+  if (env.ANTHROPIC_DRAFT_THINKING === 'between_tools' && (env.ANTHROPIC_DRAFT_EFFORT === 'xhigh' || env.ANTHROPIC_DRAFT_EFFORT === 'max')) {
+    issues.push('ANTHROPIC_DRAFT_EFFORT: xhigh and max need ANTHROPIC_DRAFT_THINKING=adaptive (between_tools allows low, medium or high)');
   }
   if (env.APP_MODE !== 'live') return issues;
 

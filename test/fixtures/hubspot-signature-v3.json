@@ -1,0 +1,58 @@
+{
+  "description": "HubSpot webhook signature v3 known-answer vectors (docs/research/03-hubspot-webhooks.md 03.2, HS-WH-SIG-V3-VECTORS). signature = base64(HMAC-SHA256(clientSecret, UTF-8(method + signedUri + body + timestampHeader))). HS-V3-PY-SDK and HS-V3-RB-SDK are published in HubSpot's official Python and Ruby SDK tests; the AUTOPILOT vectors were generated locally and reproduced with the official Node, Python, Ruby and PHP code. Bodies are exact strings.",
+  "maxSkewMs": 300000,
+  "vectors": [
+    {
+      "id": "HS-V3-PY-SDK",
+      "clientSecret": "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
+      "method": "POST",
+      "signedUri": "https://www.example.com/webhook_uri",
+      "body": "{'example_field':'example_value'}",
+      "bodyUtf8Bytes": 33,
+      "timestampHeader": "1693657560000",
+      "expectedSignatureV3": "K36dawei4A+QBNolUOqo7s91KQDWQ5MXZ/QufNYuk/Y="
+    },
+    {
+      "id": "HS-V3-RB-SDK",
+      "clientSecret": "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
+      "method": "POST",
+      "signedUri": "https://www.example.com/webhook_uri",
+      "body": "{'example_field':'example_value'}",
+      "bodyUtf8Bytes": 33,
+      "timestampHeader": "1700000300000",
+      "expectedSignatureV3": "RnbPH7+UMKVkbV32P8bz450N4M56aPmcru1+D3kSDtw="
+    },
+    {
+      "id": "HS-V3-AUTOPILOT-1",
+      "clientSecret": "autopilot-test-client-secret-0001",
+      "method": "POST",
+      "signedUri": "https://example.com/api/hubspot/webhooks",
+      "body": "[{\"eventId\":4100000001,\"subscriptionId\":5100001,\"portalId\":12345678,\"appId\":7100001,\"occurredAt\":1790000000000,\"subscriptionType\":\"contact.creation\",\"attemptNumber\":0,\"objectId\":901,\"changeFlag\":\"NEW\",\"changeSource\":\"FORM\"},{\"eventId\":4100000002,\"subscriptionId\":5100001,\"portalId\":12345678,\"appId\":7100001,\"occurredAt\":1790000000500,\"subscriptionType\":\"contact.creation\",\"attemptNumber\":0,\"objectId\":902,\"changeFlag\":\"NEW\",\"changeSource\":\"CRM_UI\"}]",
+      "bodyUtf8Bytes": 449,
+      "timestampHeader": "1790000001000",
+      "expectedSignatureV3": "vc6X4JO1KMElXem9r7vSovD2GajkBW8j6R1JB/N89Rk="
+    },
+    {
+      "id": "HS-V3-AUTOPILOT-2-UTF8",
+      "clientSecret": "autopilot-test-client-secret-0001",
+      "method": "POST",
+      "signedUri": "https://example.com/api/hubspot/webhooks",
+      "body": "[{\"appId\":7100001,\"eventId\":4100000003,\"subscriptionId\":5100002,\"portalId\":12345678,\"occurredAt\":1790000002000,\"subscriptionType\":\"object.creation\",\"attemptNumber\":1,\"objectId\":903,\"objectTypeId\":\"0-1\",\"changeSource\":\"FORM\",\"note\":\"Zoë — café ☕\"}]",
+      "bodyUtf8Bytes": 253,
+      "timestampHeader": "1790000003000",
+      "expectedSignatureV3": "iwUOcQxOJMXtoVai85f7uLyYuAp58oXpeyP5gPQKS2k="
+    },
+    {
+      "id": "HS-V3-AUTOPILOT-3-QUERY",
+      "clientSecret": "autopilot-test-client-secret-0001",
+      "method": "POST",
+      "rawRequestUri": "https://example.com/api/hubspot/webhooks?src=hs%3Aapp%2Fv3&x=%28a%29",
+      "signedUri": "https://example.com/api/hubspot/webhooks?src=hs:app/v3&x=(a)",
+      "body": "[]",
+      "bodyUtf8Bytes": 2,
+      "timestampHeader": "1790000004000",
+      "expectedSignatureV3": "G8ddQlikFQ0ScZOZn+MHQ0E3WCV7vOJTzKlvrkvbvuk=",
+      "signatureOverUndecodedUri": "KKwrtu49d26FrUsDQdYcfAcwFssKn+cmyppOAUwOO/Q="
+    }
+  ]
+}

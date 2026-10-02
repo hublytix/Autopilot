@@ -16,8 +16,8 @@ The product name comes from `PRODUCT_NAME` (default `Hublytix Autopilot`). The p
 
 | Milestone | Scope | Status |
 |---|---|---|
-| M1 | Scaffold, CI, migrations, PGlite test harness, fakes, `CLAUDE.md` | In progress |
-| M2 | HubSpot OAuth, connection management, webhook intake, poller, classification | Not started |
+| M1 | Scaffold, CI, migrations, PGlite test harness, fakes, `CLAUDE.md` | Done |
+| M2 | HubSpot OAuth, connection management, webhook intake, poller, classification | Done (pending commit) |
 | M3 | Brief builder, onboarding, inbox-logging check, baseline | Not started |
 | M4 | Draft engine, validator, notification emails, action-link pages | Not started |
 | M5 | Follow-up scheduler, reply detection, stop rules | Not started |
@@ -25,7 +25,7 @@ The product name comes from `PRODUCT_NAME` (default `Hublytix Autopilot`). The p
 | M7 | Billing, trial, settings, disconnect and purge, admin | Not started |
 | M8 | Public pages, simulation polish, docs, review | Not started |
 
-At M1 the app has placeholder `/` and `/login` pages and `GET /api/health`, and `npm run simulate` writes a summary with no checks yet. Each milestone adds a stage to the simulation.
+At M2 the app installs into HubSpot (in fake mode through the fake consent page `/dev/fake-hubspot/authorize`), stores the encrypted tokens, receives webhooks, polls the selected forms every 5 minutes and classifies each new lead. The onboarding pages arrive in M3, so an install currently ends on `/onboarding/email` (a 404 page for now). `npm run simulate` runs the install, a seeded onboarding and Day 0's six submissions, and checks intake and classification. Each milestone adds a stage to the simulation.
 
 ## Quick start (fake mode, no credentials)
 
