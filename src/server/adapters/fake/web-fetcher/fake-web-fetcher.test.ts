@@ -72,6 +72,17 @@ describe('FakeWebFetcher: fixture pages', () => {
     expect(await codeOf(fetcher, `${FIXTURE_SITE_URL}%2e%2e/%2e%2e/package.json`)).toBe('http_error');
   });
 
+  it('serves the same pages from memory after preload(), with the same 404s and traversal refusal', async () => {
+    const disk = new FakeWebFetcher();
+    const memory = await new FakeWebFetcher().preload();
+    for (const pagePath of ['', 'services', 'blog/2', 'robots.txt', 'contact']) {
+      const [fromDisk, fromMemory] = await Promise.all([disk.fetch(`${FIXTURE_SITE_URL}${pagePath}`, opts()), memory.fetch(`${FIXTURE_SITE_URL}${pagePath}`, opts())]);
+      expect(fromMemory, pagePath).toEqual(fromDisk);
+    }
+    expect((await fetchError(memory, `${FIXTURE_SITE_URL}does-not-exist`)).httpStatus).toBe(404);
+    expect(await codeOf(memory, `${FIXTURE_SITE_URL}%2e%2e/%2e%2e/package.json`)).toBe('http_error');
+  });
+
   it('reports non-2xx virtual routes as http_error with the status', async () => {
     const error = await fetchError(new FakeWebFetcher(), `${FIXTURE_SITE_URL}broken`);
     expect(error.code).toBe('http_error');

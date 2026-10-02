@@ -59,6 +59,7 @@ async function callback(jar: CookieJar, params: Record<string, string>): Promise
   const res = await handleHubSpotCallback(jar.request(url(`/api/hubspot/oauth/callback?${query}`)), rig.deps, {
     sendReconnectMagicLink: async (_deps, input) => {
       magicLinks.push(input);
+      return true;
     },
   });
   jar.storeFrom(res);
@@ -337,7 +338,7 @@ describe('callback branch (d): an owned portal without the owner’s session', (
     const accountBefore = (await accounts())[0];
     rig.clock.advance({ hours: 2 });
     const { res } = await install();
-    expect(locationOf(res)).toBe(url('/install/sign-in-to-reconnect'));
+    expect(locationOf(res)).toBe(url('/install/sign-in-to-reconnect?sent=1'));
     expect(magicLinks).toEqual([{ accountId }]);
     expect(rig.fakes.mailer.sent).toHaveLength(0);
     expect(alerts).toHaveLength(0);

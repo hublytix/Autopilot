@@ -12,8 +12,9 @@ import {
   type ModelParamsConfig,
   type ModelPurpose,
 } from '@/server/ai/model-params';
+import { buildBriefPrompt } from '@/server/ai/prompts/brief';
 import { buildClassifyPrompt } from '@/server/ai/prompts/classify';
-import { CLASSIFICATION_JSON_SCHEMA, ClassificationOutputSchema } from '@/server/ai/schemas';
+import { BRIEF_JSON_SCHEMA, BriefOutputSchema, CLASSIFICATION_JSON_SCHEMA, ClassificationOutputSchema } from '@/server/ai/schemas';
 import { isRefusalCategory } from '@/server/domain/types';
 import { log as defaultLog, type Logger } from '@/server/obs/log';
 import type { Clock } from '@/server/ports/clock';
@@ -48,7 +49,7 @@ import type {
 // ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN cannot turn on body logging or redirect prompts. Error
 // messages from the SDK or JSON.parse are never read; logs carry class, status, request id and codes.
 //
-// Status: classify is complete. generateBrief (M3) and draft/draftFollowUp (M4) share #call but
+// Status: classify (M2) and generateBrief (M3) are complete. draft/draftFollowUp (M4) share #call but
 // their prompts are not built yet, so they answer FATAL-CONFIG `not_built` without a network call.
 
 /** The part of the SDK client this adapter uses (tests pass a stub, or a real client with a stubbed fetch). */
@@ -198,11 +199,25 @@ export class AnthropicLLM implements LLM {
     });
   }
 
-  // M3: build the brief prompt (pages inside untrusted delimiters, "Think the problem through before
-  // you answer.") and call #call({purpose: 'brief', model: draft, attempt: options.attempt + 1,
-  // remainingMs: options.timeoutMs, schema: BRIEF_JSON_SCHEMA, output: BriefOutputSchema}).
-  async generateBrief(_input: GenerateBriefInput, _options: GenerateBriefOptions): Promise<LlmResult<BriefDraft>> {
-    return this.#notBuilt('brief', this.#models.draft);
+  /**
+   * The business brief (PLAN §9.7, D-24): the crawled page text inside untrusted-input delimiters.
+   * Delivery 0 runs adaptive / ANTHROPIC_BRIEF_EFFORT / 16000; any later delivery the between_tools
+   * / high / 4096 fallback. The remaining job budget is the per-call `{timeout, signal}`. Post-processing
+   * (FAQ cap, allow_pricing, booking-link checks) is the caller's.
+   */
+  async generateBrief(input: GenerateBriefInput, options: GenerateBriefOptions): Promise<LlmResult<BriefDraft>> {
+    const prompt = buildBriefPrompt(input);
+    const delivery = Number.isInteger(options.attempt) && options.attempt > 0 ? options.attempt : 0;
+    return this.#call({
+      purpose: 'brief',
+      model: this.#models.draft,
+      attempt: delivery + 1,
+      remainingMs: options.timeoutMs,
+      system: prompt.system,
+      messages: prompt.messages,
+      schema: BRIEF_JSON_SCHEMA,
+      output: BriefOutputSchema,
+    });
   }
 
   // M4: the draft and follow-up prompts call #call({purpose: 'draft' | 'followup', model: draft,

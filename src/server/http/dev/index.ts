@@ -12,4 +12,3 @@ export {
   handleFakeHubSpotDecisionOtherMethod,
 } from './fake-hubspot';
 export type { AuthorizeRejection, AuthorizeRequest, ConsentPortal, ConsentView, SearchParamsRecord } from './fake-hubspot';
-export { isSameOriginRequest } from './same-origin';

@@ -1,0 +1,222 @@
+{
+  "description": "Compose-link golden vectors (D-13, docs/research/06-compose-urls.md 06.2). TV1–TV3 are the research vectors, byte for byte; gmail_u* (the default COMPOSE_GMAIL_FORM=u) and outlook_personal (no /0/ index, the default base) are derived from them by string transformation. The cases are hand-computed.",
+  "config": {
+    "outlookWorkBase": "https://outlook.cloud.microsoft/mail/deeplink/compose",
+    "outlookPersonalBase": "https://outlook.live.com/mail/deeplink/compose",
+    "limit": 1800
+  },
+  "vectors": [
+    {
+      "id": "TV1",
+      "source": "research 06.2 (verified); gmail_u*, outlook_personal derived by string transformation",
+      "input": {
+        "to": [
+          "jane@example.com"
+        ],
+        "bcc": [],
+        "subject": "Re: Your enquiry",
+        "body": "Hi Jane,\n\nThanks for reaching out.\n\nBest,\nSam"
+      },
+      "gmailAccount": "sam@acme.com",
+      "expected": {
+        "mailto": "mailto:jane@example.com?subject=Re%3A%20Your%20enquiry&body=Hi%20Jane%2C%0D%0A%0D%0AThanks%20for%20reaching%20out.%0D%0A%0D%0ABest%2C%0D%0ASam",
+        "gmail_view": "https://mail.google.com/mail/?view=cm&fs=1&to=jane@example.com&su=Re%3A%20Your%20enquiry&body=Hi%20Jane%2C%0A%0AThanks%20for%20reaching%20out.%0A%0ABest%2C%0ASam",
+        "gmail_view_account": "https://mail.google.com/mail/u/sam@acme.com/?view=cm&fs=1&to=jane@example.com&su=Re%3A%20Your%20enquiry&body=Hi%20Jane%2C%0A%0AThanks%20for%20reaching%20out.%0A%0ABest%2C%0ASam",
+        "gmail_u": "https://mail.google.com/mail/u/0/?to=jane@example.com&su=Re%3A%20Your%20enquiry&body=Hi%20Jane%2C%0A%0AThanks%20for%20reaching%20out.%0A%0ABest%2C%0ASam&tf=cm",
+        "gmail_u_account": "https://mail.google.com/mail/u/sam@acme.com/?to=jane@example.com&su=Re%3A%20Your%20enquiry&body=Hi%20Jane%2C%0A%0AThanks%20for%20reaching%20out.%0A%0ABest%2C%0ASam&tf=cm",
+        "outlook_work": "https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=mailto%3Ajane%40example.com%3Fsubject%3DRe%253A%2520Your%2520enquiry%26body%3DHi%2520Jane%252C%250D%250A%250D%250AThanks%2520for%2520reaching%2520out.%250D%250A%250D%250ABest%252C%250D%250ASam",
+        "outlook_personal": "https://outlook.live.com/mail/deeplink/compose?mailtouri=mailto%3Ajane%40example.com%3Fsubject%3DRe%253A%2520Your%2520enquiry%26body%3DHi%2520Jane%252C%250D%250A%250D%250AThanks%2520for%2520reaching%2520out.%250D%250A%250D%250ABest%252C%250D%250ASam",
+        "outlook_params_work": "https://outlook.cloud.microsoft/mail/deeplink/compose?to=jane@example.com&subject=Re%3A%20Your%20enquiry&body=Hi%20Jane%2C%0A%0AThanks%20for%20reaching%20out.%0A%0ABest%2C%0ASam"
+      },
+      "lengths": {
+        "mailto": 142,
+        "gmail_view": 161,
+        "gmail_view_account": 176,
+        "gmail_u": 158,
+        "gmail_u_account": 169,
+        "outlook_work": 256,
+        "outlook_personal": 249,
+        "outlook_params_work": 177
+      }
+    },
+    {
+      "id": "TV2",
+      "source": "research 06.2 (verified); gmail_u*, outlook_personal derived by string transformation",
+      "input": {
+        "to": [
+          "jane+leads@example.com"
+        ],
+        "bcc": [
+          "log-1234@bcc.example.net"
+        ],
+        "subject": "Q&A: 50% off? #1 = best + more",
+        "body": "C++ & C#; 1+1=2 ?x=y#frag %20 literal 'q' \"dq\" (p) *s* !b café — naïve 😀\r\nline2\rline3"
+      },
+      "gmailAccount": "sam@acme.com",
+      "expected": {
+        "mailto": "mailto:jane%2Bleads@example.com?bcc=log-1234@bcc.example.net&subject=Q%26A%3A%2050%25%20off%3F%20%231%20%3D%20best%20%2B%20more&body=C%2B%2B%20%26%20C%23%3B%201%2B1%3D2%20%3Fx%3Dy%23frag%20%2520%20literal%20%27q%27%20%22dq%22%20%28p%29%20%2As%2A%20%21b%20caf%C3%A9%20%E2%80%94%20na%C3%AFve%20%F0%9F%98%80%0D%0Aline2%0D%0Aline3",
+        "gmail_view": "https://mail.google.com/mail/?view=cm&fs=1&to=jane%2Bleads@example.com&bcc=log-1234@bcc.example.net&su=Q%26A%3A%2050%25%20off%3F%20%231%20%3D%20best%20%2B%20more&body=C%2B%2B%20%26%20C%23%3B%201%2B1%3D2%20%3Fx%3Dy%23frag%20%2520%20literal%20%27q%27%20%22dq%22%20%28p%29%20%2As%2A%20%21b%20caf%C3%A9%20%E2%80%94%20na%C3%AFve%20%F0%9F%98%80%0Aline2%0Aline3",
+        "gmail_view_account": "https://mail.google.com/mail/u/sam@acme.com/?view=cm&fs=1&to=jane%2Bleads@example.com&bcc=log-1234@bcc.example.net&su=Q%26A%3A%2050%25%20off%3F%20%231%20%3D%20best%20%2B%20more&body=C%2B%2B%20%26%20C%23%3B%201%2B1%3D2%20%3Fx%3Dy%23frag%20%2520%20literal%20%27q%27%20%22dq%22%20%28p%29%20%2As%2A%20%21b%20caf%C3%A9%20%E2%80%94%20na%C3%AFve%20%F0%9F%98%80%0Aline2%0Aline3",
+        "gmail_u": "https://mail.google.com/mail/u/0/?to=jane%2Bleads@example.com&bcc=log-1234@bcc.example.net&su=Q%26A%3A%2050%25%20off%3F%20%231%20%3D%20best%20%2B%20more&body=C%2B%2B%20%26%20C%23%3B%201%2B1%3D2%20%3Fx%3Dy%23frag%20%2520%20literal%20%27q%27%20%22dq%22%20%28p%29%20%2As%2A%20%21b%20caf%C3%A9%20%E2%80%94%20na%C3%AFve%20%F0%9F%98%80%0Aline2%0Aline3&tf=cm",
+        "gmail_u_account": "https://mail.google.com/mail/u/sam@acme.com/?to=jane%2Bleads@example.com&bcc=log-1234@bcc.example.net&su=Q%26A%3A%2050%25%20off%3F%20%231%20%3D%20best%20%2B%20more&body=C%2B%2B%20%26%20C%23%3B%201%2B1%3D2%20%3Fx%3Dy%23frag%20%2520%20literal%20%27q%27%20%22dq%22%20%28p%29%20%2As%2A%20%21b%20caf%C3%A9%20%E2%80%94%20na%C3%AFve%20%F0%9F%98%80%0Aline2%0Aline3&tf=cm",
+        "outlook_work": "https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=mailto%3Ajane%252Bleads%40example.com%3Fbcc%3Dlog-1234%40bcc.example.net%26subject%3DQ%2526A%253A%252050%2525%2520off%253F%2520%25231%2520%253D%2520best%2520%252B%2520more%26body%3DC%252B%252B%2520%2526%2520C%2523%253B%25201%252B1%253D2%2520%253Fx%253Dy%2523frag%2520%252520%2520literal%2520%2527q%2527%2520%2522dq%2522%2520%2528p%2529%2520%252As%252A%2520%2521b%2520caf%25C3%25A9%2520%25E2%2580%2594%2520na%25C3%25AFve%2520%25F0%259F%2598%2580%250D%250Aline2%250D%250Aline3",
+        "outlook_personal": "https://outlook.live.com/mail/deeplink/compose?mailtouri=mailto%3Ajane%252Bleads%40example.com%3Fbcc%3Dlog-1234%40bcc.example.net%26subject%3DQ%2526A%253A%252050%2525%2520off%253F%2520%25231%2520%253D%2520best%2520%252B%2520more%26body%3DC%252B%252B%2520%2526%2520C%2523%253B%25201%252B1%253D2%2520%253Fx%253Dy%2523frag%2520%252520%2520literal%2520%2527q%2527%2520%2522dq%2522%2520%2528p%2529%2520%252As%252A%2520%2521b%2520caf%25C3%25A9%2520%25E2%2580%2594%2520na%25C3%25AFve%2520%25F0%259F%2598%2580%250D%250Aline2%250D%250Aline3"
+      },
+      "lengths": {
+        "mailto": 326,
+        "gmail_view": 354,
+        "gmail_view_account": 369,
+        "gmail_u": 351,
+        "gmail_u_account": 362,
+        "outlook_work": 538,
+        "outlook_personal": 531
+      }
+    },
+    {
+      "id": "TV3",
+      "source": "research 06.2 (verified); gmail_u*, outlook_personal derived by string transformation",
+      "input": {
+        "to": [
+          "jane.doe@acme-industries.com"
+        ],
+        "bcc": [
+          "12345678@bcc.example-crm.com"
+        ],
+        "subject": "Re: Kitchen remodel enquiry",
+        "body": "Hi Jane,\n\nThanks for reaching out about the kitchen remodel quote and timing for next month Thanks for reaching out about the kitchen remodel quote and timing for next month Thanks for reaching out about the kitchen remodel quote and timing for next month Thanks for reaching out about the kitchen remodel quote and timing for next month Thanks for reaching out.\n\nabout the kitchen remodel quote and timing for next month Thanks for reaching out about the kitchen remodel quote and timing for next month Thanks for reaching out about the kitchen remodel quote and timing for next month Thanks for reaching out about the kitchen remodel quote and timing for next month Thanks for reaching out. Book a time: https://meetings.hubspot.com/sam-smith/intro?utm_source=autopilot\n\nBest,\nSam"
+      },
+      "gmailAccount": "sam@acme.com",
+      "expected": {
+        "mailto": "mailto:jane.doe@acme-industries.com?bcc=12345678@bcc.example-crm.com&subject=Re%3A%20Kitchen%20remodel%20enquiry&body=Hi%20Jane%2C%0D%0A%0D%0AThanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out.%0D%0A%0D%0Aabout%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out.%20Book%20a%20time%3A%20https%3A%2F%2Fmeetings.hubspot.com%2Fsam-smith%2Fintro%3Futm_source%3Dautopilot%0D%0A%0D%0ABest%2C%0D%0ASam",
+        "gmail_view": "https://mail.google.com/mail/?view=cm&fs=1&to=jane.doe@acme-industries.com&bcc=12345678@bcc.example-crm.com&su=Re%3A%20Kitchen%20remodel%20enquiry&body=Hi%20Jane%2C%0A%0AThanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out.%0A%0Aabout%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out.%20Book%20a%20time%3A%20https%3A%2F%2Fmeetings.hubspot.com%2Fsam-smith%2Fintro%3Futm_source%3Dautopilot%0A%0ABest%2C%0ASam",
+        "gmail_view_account": "https://mail.google.com/mail/u/sam@acme.com/?view=cm&fs=1&to=jane.doe@acme-industries.com&bcc=12345678@bcc.example-crm.com&su=Re%3A%20Kitchen%20remodel%20enquiry&body=Hi%20Jane%2C%0A%0AThanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out.%0A%0Aabout%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out.%20Book%20a%20time%3A%20https%3A%2F%2Fmeetings.hubspot.com%2Fsam-smith%2Fintro%3Futm_source%3Dautopilot%0A%0ABest%2C%0ASam",
+        "gmail_u": "https://mail.google.com/mail/u/0/?to=jane.doe@acme-industries.com&bcc=12345678@bcc.example-crm.com&su=Re%3A%20Kitchen%20remodel%20enquiry&body=Hi%20Jane%2C%0A%0AThanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out.%0A%0Aabout%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out.%20Book%20a%20time%3A%20https%3A%2F%2Fmeetings.hubspot.com%2Fsam-smith%2Fintro%3Futm_source%3Dautopilot%0A%0ABest%2C%0ASam&tf=cm",
+        "gmail_u_account": "https://mail.google.com/mail/u/sam@acme.com/?to=jane.doe@acme-industries.com&bcc=12345678@bcc.example-crm.com&su=Re%3A%20Kitchen%20remodel%20enquiry&body=Hi%20Jane%2C%0A%0AThanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out.%0A%0Aabout%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out%20about%20the%20kitchen%20remodel%20quote%20and%20timing%20for%20next%20month%20Thanks%20for%20reaching%20out.%20Book%20a%20time%3A%20https%3A%2F%2Fmeetings.hubspot.com%2Fsam-smith%2Fintro%3Futm_source%3Dautopilot%0A%0ABest%2C%0ASam&tf=cm",
+        "outlook_work": "https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=mailto%3Ajane.doe%40acme-industries.com%3Fbcc%3D12345678%40bcc.example-crm.com%26subject%3DRe%253A%2520Kitchen%2520remodel%2520enquiry%26body%3DHi%2520Jane%252C%250D%250A%250D%250AThanks%2520for%2520reaching%2520out%2520about%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out%2520about%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out%2520about%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out%2520about%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out.%250D%250A%250D%250Aabout%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out%2520about%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out%2520about%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out%2520about%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out.%2520Book%2520a%2520time%253A%2520https%253A%252F%252Fmeetings.hubspot.com%252Fsam-smith%252Fintro%253Futm_source%253Dautopilot%250D%250A%250D%250ABest%252C%250D%250ASam",
+        "outlook_personal": "https://outlook.live.com/mail/deeplink/compose?mailtouri=mailto%3Ajane.doe%40acme-industries.com%3Fbcc%3D12345678%40bcc.example-crm.com%26subject%3DRe%253A%2520Kitchen%2520remodel%2520enquiry%26body%3DHi%2520Jane%252C%250D%250A%250D%250AThanks%2520for%2520reaching%2520out%2520about%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out%2520about%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out%2520about%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out%2520about%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out.%250D%250A%250D%250Aabout%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out%2520about%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out%2520about%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out%2520about%2520the%2520kitchen%2520remodel%2520quote%2520and%2520timing%2520for%2520next%2520month%2520Thanks%2520for%2520reaching%2520out.%2520Book%2520a%2520time%253A%2520https%253A%252F%252Fmeetings.hubspot.com%252Fsam-smith%252Fintro%253Futm_source%253Dautopilot%250D%250A%250D%250ABest%252C%250D%250ASam"
+      },
+      "lengths": {
+        "mailto": 1193,
+        "gmail_view": 1206,
+        "gmail_view_account": 1221,
+        "gmail_u": 1203,
+        "gmail_u_account": 1214,
+        "outlook_work": 1569,
+        "outlook_personal": 1562
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "plus",
+      "input": {
+        "to": [
+          "a+b@example.com"
+        ],
+        "bcc": [],
+        "subject": "1+1 = 2",
+        "body": "a b+c"
+      },
+      "expected": {
+        "mailto": "mailto:a%2Bb@example.com?subject=1%2B1%20%3D%202&body=a%20b%2Bc",
+        "gmail_u": "https://mail.google.com/mail/u/0/?to=a%2Bb@example.com&su=1%2B1%20%3D%202&body=a%20b%2Bc&tf=cm",
+        "outlook_work": "https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=mailto%3Aa%252Bb%40example.com%3Fsubject%3D1%252B1%2520%253D%25202%26body%3Da%2520b%252Bc",
+        "outlook_params_work": "https://outlook.cloud.microsoft/mail/deeplink/compose?to=a%2Bb@example.com&subject=1%2B1%20%3D%202&body=a%20b%2Bc"
+      }
+    },
+    {
+      "id": "ampersand",
+      "input": {
+        "to": [
+          "jane@example.com"
+        ],
+        "bcc": [],
+        "subject": "Q&A",
+        "body": "Tom & Jerry: x=1&y=2"
+      },
+      "expected": {
+        "mailto": "mailto:jane@example.com?subject=Q%26A&body=Tom%20%26%20Jerry%3A%20x%3D1%26y%3D2",
+        "gmail_u": "https://mail.google.com/mail/u/0/?to=jane@example.com&su=Q%26A&body=Tom%20%26%20Jerry%3A%20x%3D1%26y%3D2&tf=cm"
+      }
+    },
+    {
+      "id": "crlf",
+      "input": {
+        "to": [
+          "jane@example.com"
+        ],
+        "bcc": [],
+        "subject": "Line one\r\nLine two",
+        "body": "a\r\nb\nc\rd"
+      },
+      "expected": {
+        "mailto": "mailto:jane@example.com?subject=Line%20one%20Line%20two&body=a%0D%0Ab%0D%0Ac%0D%0Ad",
+        "gmail_u": "https://mail.google.com/mail/u/0/?to=jane@example.com&su=Line%20one%20Line%20two&body=a%0Ab%0Ac%0Ad&tf=cm",
+        "outlook_work": "https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=mailto%3Ajane%40example.com%3Fsubject%3DLine%2520one%2520Line%2520two%26body%3Da%250D%250Ab%250D%250Ac%250D%250Ad",
+        "outlook_params_work": "https://outlook.cloud.microsoft/mail/deeplink/compose?to=jane@example.com&subject=Line%20one%20Line%20two&body=a%0Ab%0Ac%0Ad"
+      }
+    },
+    {
+      "id": "lone_surrogate",
+      "input": {
+        "to": [
+          "jane@example.com"
+        ],
+        "bcc": [],
+        "subject": "Hi \ud83d there",
+        "body": "x\ude00y"
+      },
+      "expected": {
+        "mailto": "mailto:jane@example.com?subject=Hi%20%EF%BF%BD%20there&body=x%EF%BF%BDy",
+        "gmail_u": "https://mail.google.com/mail/u/0/?to=jane@example.com&su=Hi%20%EF%BF%BD%20there&body=x%EF%BF%BDy&tf=cm"
+      }
+    },
+    {
+      "id": "idn",
+      "input": {
+        "to": [
+          "jane@bücher.example"
+        ],
+        "bcc": [
+          "log@bcc.hubspot.com"
+        ],
+        "subject": "Hello",
+        "body": "Hi"
+      },
+      "gmailAccount": "sam@münchen.example",
+      "expected": {
+        "mailto": "mailto:jane@xn--bcher-kva.example?bcc=log@bcc.hubspot.com&subject=Hello&body=Hi",
+        "gmail_u_account": "https://mail.google.com/mail/u/sam@xn--mnchen-3ya.example/?to=jane@xn--bcher-kva.example&bcc=log@bcc.hubspot.com&su=Hello&body=Hi&tf=cm",
+        "outlook_work": "https://outlook.cloud.microsoft/mail/deeplink/compose?mailtouri=mailto%3Ajane%40xn--bcher-kva.example%3Fbcc%3Dlog%40bcc.hubspot.com%26subject%3DHello%26body%3DHi"
+      }
+    },
+    {
+      "id": "non_ascii_local_part",
+      "input": {
+        "to": [
+          "josé@example.com"
+        ],
+        "bcc": [],
+        "subject": "Hi",
+        "body": "Hi"
+      },
+      "expected": {
+        "mailto": "mailto:jos%C3%A9@example.com?subject=Hi&body=Hi"
+      }
+    },
+    {
+      "id": "rfc6068_6_1",
+      "input": {
+        "to": [
+          "infobot@example.com"
+        ],
+        "bcc": [],
+        "subject": "",
+        "body": "send current-issue\r\nsend index"
+      },
+      "expected": {
+        "mailto": "mailto:infobot@example.com?body=send%20current-issue%0D%0Asend%20index"
+      }
+    }
+  ]
+}

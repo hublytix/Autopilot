@@ -54,8 +54,9 @@ export interface EmailSummary {
  * A lead as summary.json shows it. No database ids: leads.id is gen_random_uuid(), so it would make
  * summary.json differ from run to run. `ref` is a stable label: the scenario's own number for the
  * submissions it declares (`L5` is submission #5, whenever it arrives), then `L{n}` for any other
- * lead in the order (submitted_at, hubspot_contact_id, form_id, is_test). Emails and timeline
- * entries name their lead by the same ref.
+ * lead in the order (submitted_at, hubspot_contact_id, form_id). Emails and timeline entries name
+ * their lead by the same ref. The onboarding test lead is never listed (PLAN §13), so `isTest` is
+ * always false here.
  */
 export interface LeadSummary {
   ref: string;

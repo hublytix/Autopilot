@@ -40,7 +40,7 @@ async function boot(db: Db, scheduler: FlushScheduler, clock = new FakeClock(STA
   const built = createFakeDeps({ env, db, clock, mailSink: { kind: 'memory' }, onStateChange: (name) => ref.persistence?.markChanged(name) });
   const persistence = await startFakeStatePersistence<PersistedFakeName>({
     db,
-    sources: { hubspot: built.fakes.hubspot, billing: built.fakes.billing },
+    sources: { hubspot: built.fakes.hubspot, billing: built.fakes.billing, auth: built.fakes.auth },
     schedule: scheduler,
     debounceMs: 50,
   });

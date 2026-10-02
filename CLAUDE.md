@@ -5,7 +5,7 @@ Autopilot drafts replies and follow-ups for new HubSpot form leads; the owner se
 ## Where things are written down
 - `docs/BUILD_BRIEF.md`: the original spec. The product laws below always apply.
 - `docs/PLAN.md`: the approved plan (schema §5, routes §7, jobs §8, flows §9, security §10, tests §12, simulation §13, env §14, milestones §15). Build exactly what it says. If PLAN and DECISIONS disagree, PLAN wins; record the discrepancy.
-- `docs/DECISIONS.md`: D-01…D-55, the detailed rules behind the plan (D-53 records the M1 review fixes, D-54 the M2 build choices, D-55 the M2 review fixes).
+- `docs/DECISIONS.md`: D-01…D-62, the detailed rules behind the plan (D-53 records the M1 review fixes, D-54 the M2 build choices, D-55 the M2 review fixes, D-56…D-60 the M3 build choices, D-61 the M3 integration, D-62 the M3 review fixes).
 - `docs/RESEARCH.md` + `docs/research/*.md`: verified vendor facts and test vectors. Finding IDs in [brackets] point here.
 - `docs/ARCHITECTURE.md`: layers, data flow, where each concern lives.
 - `docs/WIRE_UP.md` (M8): connecting the real services.
@@ -63,4 +63,4 @@ APP_MODE=fake npm run smoke      # /api/health, /, /login return 200
 npm run simulate                 # writes outbox/summary.json; exits non-zero if a check fails
 npm run check:bundle             # no secrets or server-only env names in .next/static or the prerendered pages
 ```
-Then one commit (specific paths only) and a 5-line summary. CI (`.github/workflows/ci.yml`) runs the same gates.
+Then one commit (specific paths only) and a 5-line summary. CI (`.github/workflows/ci.yml`) runs the same gates, plus `npm run e2e:fake` (the onboarding end to end against `next start` in fake mode, without JavaScript).

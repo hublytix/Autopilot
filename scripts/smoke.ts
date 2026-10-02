@@ -1,95 +1,15 @@
 // Build-and-smoke gate (PLAN §15 step 4): starts the already-built app with `next start` and checks
 // that the public placeholder routes answer 200. Run `APP_MODE=fake npm run build` first.
-import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { join } from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
+import { freePort, get, HOST, ROOT, startServer, stopServer, waitUntilReady } from './next-server';
 
-const ROOT = process.cwd();
-const HOST = '127.0.0.1';
-const POLL_INTERVAL_MS = 500;
-const READY_TIMEOUT_MS = 60_000;
-const REQUEST_TIMEOUT_MS = 10_000;
 const PATHS = ['/api/health', '/', '/login'] as const;
 
 interface CheckResult {
   path: string;
   ok: boolean;
   detail: string;
-}
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.unref();
-    server.once('error', reject);
-    server.listen(0, HOST, () => {
-      const address = server.address();
-      if (address === null || typeof address === 'string') {
-        server.close();
-        reject(new Error('could not determine a free port'));
-        return;
-      }
-      const { port } = address;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-function startServer(port: number, output: string[]): ChildProcess {
-  const nextBin = join(ROOT, 'node_modules', 'next', 'dist', 'bin', 'next');
-  const child = spawn(process.execPath, [nextBin, 'start', '--hostname', HOST, '--port', String(port)], {
-    cwd: ROOT,
-    env: { ...process.env, PORT: String(port) },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    // Own process group, so the whole tree can be stopped at the end.
-    detached: true,
-  });
-  const keep = (chunk: Buffer): void => {
-    output.push(chunk.toString('utf8'));
-    if (output.length > 200) output.shift();
-  };
-  child.stdout?.on('data', keep);
-  child.stderr?.on('data', keep);
-  return child;
-}
-
-function signalServer(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
-    child.kill(signal);
-  }
-}
-
-function stopServer(child: ChildProcess): void {
-  signalServer(child, 'SIGTERM');
-  // Escalate if the server ignores SIGTERM; unref'd so a clean exit isn't delayed.
-  setTimeout(() => signalServer(child, 'SIGKILL'), 5_000).unref();
-}
-
-async function get(url: string): Promise<Response> {
-  return fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-}
-
-async function waitUntilReady(baseUrl: string, child: ChildProcess): Promise<void> {
-  const attempts = Math.ceil(READY_TIMEOUT_MS / POLL_INTERVAL_MS);
-  for (let i = 0; i < attempts; i += 1) {
-    if (child.exitCode !== null) {
-      throw new Error(`next start exited early with code ${child.exitCode}`);
-    }
-    try {
-      const res = await get(`${baseUrl}/api/health`);
-      await res.body?.cancel();
-      if (res.status === 200) return;
-    } catch {
-      // Not listening yet.
-    }
-    await sleep(POLL_INTERVAL_MS);
-  }
-  throw new Error(`server not ready within ${READY_TIMEOUT_MS / 1000} s`);
 }
 
 async function check(baseUrl: string, path: string): Promise<CheckResult> {
@@ -123,11 +43,11 @@ async function main(): Promise<number> {
 
   const port = await freePort();
   const baseUrl = `http://${HOST}:${port}`;
-  const output: string[] = [];
-  const child = startServer(port, output);
+  const server = startServer(port);
+  const { output } = server;
 
   try {
-    await waitUntilReady(baseUrl, child);
+    await waitUntilReady(baseUrl, server);
     const results: CheckResult[] = [];
     for (const path of PATHS) {
       results.push(await check(baseUrl, path));
@@ -146,7 +66,7 @@ async function main(): Promise<number> {
     console.error(`smoke: ${err instanceof Error ? err.message : 'failed'}. Server output:\n${output.join('')}`);
     return 1;
   } finally {
-    stopServer(child);
+    await stopServer(server);
   }
 }
 

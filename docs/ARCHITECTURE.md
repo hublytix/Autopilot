@@ -31,9 +31,7 @@ ESLint enforces these boundaries (`eslint.config.mjs`). The full rule list is in
 
 `APP_MODE` is required. In `fake` mode every port uses its fake, the database is PGlite (a lazy `globalThis` singleton under `FAKE_DB_DIR`), secrets are the documented fake values, and `/dev/*` exposes the dev panel, the fake HubSpot consent page and the fake checkout. Live mode refuses the fake values; fake mode is refused on Vercel production and preview unless explicitly allowed (D-29). Tests and `npm run simulate` always run on fakes.
 
-Container wiring: `getContainer()` / `getDeps()` build the container once per process, on first use. In fake mode, `createFakeDeps()` (`src/server/adapters/fake/index.ts`) configures every fake from `Env` (OAuth client, webhook secrets, plan id, models, the real refresh classifier, the FakeLLM parameter assertion), PGlite under `FAKE_DB_DIR` is migrated on first open, the fake mailer writes to `fake.dev_outbox`, and the FakeScheduler delivers due jobs to the job dispatcher through `src/server/jobs/bridge.ts` (the same `runJob` and failure path `/api/jobs/run` and `/api/jobs/failed` use). Dev runs on a `DevClock` (`src/server/adapters/fake/dev-clock.ts`): the wall clock plus an offset that `/dev` advances; `fake.state` persists it and the fake portal and billing snapshots across restarts (`src/server/services/fake-state`). Every container points Luxon's `Settings.now` at its clock. In live mode the container uses `SystemClock`, Postgres.js and the live HubSpot, Anthropic, Resend and QStash adapters (imported only when the live container is built); the ports whose live adapter is not built yet (billing, web fetcher, auth) throw `ConfigError('live_adapter_not_built')` when called. Job handlers, failure paths and notification resumers are registered in one place, `src/server/jobs/handlers.ts`. The simulation builds the same fake `Deps` on an in-memory PGlite and a `FakeClock` (which also drives Luxon's `Settings.now`), and its time-travel engine (`scripts/simulation/engine.ts`) steps through events, job deliveries and cron ticks in time order.
-
-*To be completed in M8:* the dev job ticker, and how the fake clock drives the scheduler.
+Container wiring: `getContainer()` / `getDeps()` build the container once per process, on first use. In fake mode, `createFakeDeps()` (`src/server/adapters/fake/index.ts`) configures every fake from `Env` (OAuth client, webhook secrets, plan id, models, the real refresh classifier, the FakeLLM parameter assertion), PGlite under `FAKE_DB_DIR` is migrated on first open, the fake mailer writes to `fake.dev_outbox`, and the FakeScheduler delivers due jobs to the job dispatcher through `src/server/jobs/bridge.ts` (the same `runJob` and failure path `/api/jobs/run` and `/api/jobs/failed` use). Dev runs on a `DevClock` (`src/server/adapters/fake/dev-clock.ts`): the wall clock plus an offset that `/dev` advances; `fake.state` persists it and the fake portal, billing and auth (users, link tokens, sessions) snapshots across restarts (`src/server/services/fake-state`), so a bound owner keeps their account after a restart. The dev job ticker (`src/server/services/dev-ticker`, started by the fake container outside Vitest and `next build`, stopped in `close()`) delivers the FakeScheduler's due jobs every 10 s of wall time at the DevClock's `now()`, and runs the poll cron's logic once per 5-minute slot of DevClock time, so advancing the clock makes later jobs due. Every container points Luxon's `Settings.now` at its clock. In live mode the container uses `SystemClock`, Postgres.js and the live HubSpot, Anthropic, Resend, QStash, Supabase auth and web-fetcher adapters (imported only when the live container is built); billing, whose live adapter arrives in M7, throws `ConfigError('live_adapter_not_built')` when called. Job handlers, failure paths and notification resumers are registered in one place, `src/server/jobs/handlers.ts`. The simulation builds the same fake `Deps` on an in-memory PGlite and a `FakeClock` (which also drives Luxon's `Settings.now`), registers the same handlers into its own registries with a per-portal limiter wait that advances the FakeClock (`createJobHandlerRegistries({ limiterSleep })`), and its time-travel engine (`scripts/simulation/engine.ts`) steps through events, job deliveries and cron ticks in time order. `npm run e2e:fake` drives the built app (`next start`, fake mode) with plain fetch and no JavaScript through install, the magic link and every onboarding step.
 
 ## 3. Data flow
 
@@ -64,7 +62,27 @@ Report: hourly due-check → weekly_report job at Monday 08:00 local
         → computeWeeklyMetrics (cohort and event counts, honesty rules) → reserveAndSend(weekly_report)
 ```
 
-Before any of this, install and onboarding (PLAN §9.1, §9.7) create the account, bind the owner by magic link, build the business brief from the website, select forms, save preferences, run the inbox-logging check and compute the baseline. Billing (PLAN §9.9) and retention (PLAN §9.10) run beside the loop and can stop processing (`accounts.processing_state`, PLAN §6.1).
+Before any of this, install and onboarding (PLAN §9.1, §9.7) create the account, bind the owner by magic link, build the business brief from the website, select forms, save preferences, run the inbox-logging check and compute the baseline:
+
+```
+/api/hubspot/install → HubSpot consent → callback (branch a: account + connection, pending_install cookie)
+   ▼
+/onboarding/email → login intent + magic link (reserveAndSend magic_link) → any browser:
+   GET /auth/confirm (page reads the #fragment) → POST /auth/confirm → verifyOtp → intent CAS → owner bind → session
+   ▼
+/onboarding/brief: requestBriefGeneration → brief_jobs + brief_generate job → crawl (WebFetcher behind the
+   SSRF guard, robots.txt) → extract → LLM (Sonnet) → post-process → brief_versions 'generated'
+   → owner reviews and saves → brief_versions 'owner' + briefs (the brief in force)
+/onboarding/forms: listForms → newsletter detection → selected_forms (floors set when ticked)
+/onboarding/preferences: settings; extra notify addresses get a verify_notify email; change alerts after onboarding
+/onboarding/inbox: history counts → test lead (is_test) → inbox_test email (send/edit/dismiss links)
+   → inbox_check job every 60 s reads the test contact's logged emails → two legs → accounts.logging_mode
+/onboarding/baseline: the page starts the baseline job (30 days of submissions, classified in memory,
+   first logged outbound email per lead → median and % without) → Finish: the onboarding gate
+   (brief saved, a form selected, preferences saved) → onboarding_completed_at → active, floors = now
+```
+
+Billing (PLAN §9.9) and retention (PLAN §9.10) run beside the loop and can stop processing (`accounts.processing_state`, PLAN §6.1).
 
 *To be completed in M8:* a sequence diagram per flow with the modules that implement each step, and the lead state machine (PLAN §6.2) as implemented.
 
@@ -103,11 +121,17 @@ Paths are planned (PLAN §3) unless the code already exists.
 | Owner pages' data | `src/server/views/` (take `OwnerScope`) |
 | Server Actions | `src/server/actions/` (each calls `requireOwner()`) |
 | Auth, CSP, session refresh | `src/proxy.ts`, `AuthProvider` port, `src/server/security/` |
-| Crypto, keys, tokens, signatures, SSRF guard, rate limits | `src/server/security/` |
+| Crypto, keys, tokens, signatures, SSRF guard, rate limits, same-origin check, CSP builder, cookies | `src/server/security/` |
+| Sign-in, owner binding, `requireOwner`/`OwnerScope` | `src/server/services/auth/`, `src/server/http/auth/`, `src/server/actions/auth/` |
+| Brief builder (crawl, extraction, `brief_generate`) | `src/server/services/brief/`, `src/server/adapters/live/http-web-fetcher.ts`, `src/server/ai/prompts/brief.ts` |
+| Onboarding steps, gate, change alerts, notify verification | `src/server/services/onboarding/`, `src/server/views/onboarding/`, `src/server/actions/onboarding/` |
+| Inbox-logging check, baseline | `src/server/services/inbox-check/`, `src/server/services/baseline/` |
+| Compose links, action-link pages, click heuristic | `src/server/domain/compose/`, `src/server/services/action-links/`, `src/server/http/action-links/` |
+| UI kit | `src/components/ui/` |
 | Email templates | `src/emails/` (React Email, presentational) |
 | Logging and Sentry scrubbing | `src/server/obs/`, `src/shared/observability/` (`redact()`, shared Sentry options), `src/instrumentation*.ts`, `src/sentry.*.config.ts` |
 | HubSpot app definition | `hubspot-app/` |
-| Simulation, smoke, bundle check | `scripts/simulate.ts`, `scripts/smoke.ts`, `scripts/check-bundle.ts` |
+| Simulation, smoke, end-to-end run, bundle check | `scripts/simulate.ts`, `scripts/smoke.ts`, `scripts/e2e-fake.ts`, `scripts/check-bundle.ts` |
 | Tests | colocated `*.test.ts` under `src/`; the PGlite harness, fixtures and cross-cutting suites in `test/` |
 
 ## 6. Data model

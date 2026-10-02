@@ -15,7 +15,6 @@ import {
   type SearchParamsRecord,
 } from './fake-hubspot';
 import { devToolsEnabled, getDevContext, type DevContext } from './guard';
-import { isSameOriginRequest } from './same-origin';
 
 const getDb = setUpTestDb();
 
@@ -217,21 +216,5 @@ describe('POST /dev/fake-hubspot/authorize/decision', () => {
     expect(callback.status).toBe(303);
     expect(new URL(callback.headers.get('location') ?? '').pathname).toBe('/onboarding/email');
     expect(await getDb().query('select portal_id, status from hubspot_connections')).toEqual([{ portal_id: '1234567', status: 'active' }]);
-  });
-});
-
-describe('isSameOriginRequest', () => {
-  const appUrl = 'http://localhost:3000';
-  const req = (headers: Record<string, string>): Request => new Request(`${appUrl}/x`, { method: 'POST', headers });
-
-  it('compares Origin with the APP_URL origin, else requires Sec-Fetch-Site same-origin', () => {
-    expect(isSameOriginRequest(req({ Origin: 'http://localhost:3000' }), appUrl)).toBe(true);
-    expect(isSameOriginRequest(req({ Origin: 'null' }), appUrl)).toBe(false);
-    expect(isSameOriginRequest(req({ Origin: 'https://localhost:3000' }), appUrl)).toBe(false);
-    // An Origin that disagrees wins over a same-origin Sec-Fetch-Site.
-    expect(isSameOriginRequest(req({ Origin: 'https://evil.example', 'Sec-Fetch-Site': 'same-origin' }), appUrl)).toBe(false);
-    expect(isSameOriginRequest(req({ 'Sec-Fetch-Site': 'same-origin' }), appUrl)).toBe(true);
-    expect(isSameOriginRequest(req({ 'Sec-Fetch-Site': 'same-site' }), appUrl)).toBe(false);
-    expect(isSameOriginRequest(req({}), appUrl)).toBe(false);
   });
 });

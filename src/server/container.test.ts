@@ -15,6 +15,8 @@ import { AnthropicLLM } from '@/server/adapters/live/anthropic-llm';
 import { HubSpotHttpClient } from '@/server/adapters/live/hubspot';
 import { QstashScheduler } from '@/server/adapters/live/qstash-scheduler';
 import { ResendMailer } from '@/server/adapters/live/resend-mailer';
+import { HttpWebFetcher } from '@/server/adapters/live/http-web-fetcher';
+import { SupabaseAuthProvider } from '@/server/adapters/live/supabase-auth';
 import { insertJob, publishJobs } from '@/server/jobs';
 import { seedAccount } from '@/server/jobs/testing';
 import { buildContainer, buildLiveAdapters, createLiveDeps, getContainer, getDeps, resetContainer } from './container';
@@ -118,7 +120,7 @@ describe('container', () => {
     }
   });
 
-  it('fake mode: two boots on one FAKE_DB_DIR see the same portal tokens and subscriptions', async () => {
+  it('fake mode: two boots on one FAKE_DB_DIR see the same portal tokens, subscriptions and auth users', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'autopilot-container-'));
     const base = new FakeClock(new Date('2026-10-06T13:00:00.000Z'));
     const env = parseEnv({ APP_MODE: 'fake', FAKE_DB_DIR: dir });
@@ -126,7 +128,10 @@ describe('container', () => {
       const first = await buildContainer(env, { baseClock: base });
       let tokens: Awaited<ReturnType<Deps['hubspot']['exchangeCode']>>;
       let subscriptionId: string;
+      let ownerUserId: string;
       try {
+        // A bound owner's auth user must survive a restart, or users.auth_user_id points at nobody.
+        ownerUserId = (await first.deps.auth.createUser('owner@brightside-plumbing.example')).userId;
         const code = first.fakes?.hubspot.createAuthCode({ redirectUri: env.HUBSPOT_REDIRECT_URI }) ?? '';
         tokens = await first.deps.hubspot.exchangeCode(code, env.HUBSPOT_REDIRECT_URI);
         subscriptionId = (
@@ -151,9 +156,10 @@ describe('container', () => {
         await expect(second.deps.hubspot.accountDetails(tokens.accessToken)).resolves.toMatchObject({ portalId: '1234567' });
         await expect(second.deps.hubspot.refresh(tokens.refreshToken)).resolves.toMatchObject({ refreshToken: tokens.refreshToken });
         await expect(second.deps.billing.fetchSubscription(subscriptionId)).resolves.toMatchObject({ id: subscriptionId, status: 'created' });
+        await expect(second.deps.auth.findUserByEmail('owner@brightside-plumbing.example')).resolves.toEqual({ userId: ownerUserId });
         expect(
           (await second.deps.db.query<{ key: string }>('select key from fake.state order by key')).map((row) => row.key),
-        ).toEqual(['billing_snapshot', 'hubspot_snapshot']);
+        ).toEqual(['auth_snapshot', 'billing_snapshot', 'hubspot_snapshot']);
       } finally {
         await second.close();
       }
@@ -226,7 +232,7 @@ describe('container', () => {
     expect(store.__autopilot).toBeUndefined();
   });
 
-  it('live mode: HubSpot, the LLM, the mailer and the scheduler use their live adapters (built without any network call)', async () => {
+  it('live mode: HubSpot, the LLM, the mailer, the scheduler, auth and the web fetcher use their live adapters (built without any network call)', async () => {
     const env = parseEnv({ APP_MODE: 'fake' });
     const clock = new FakeClock(new Date('2026-10-06T13:00:00.000Z'));
     const adapters = await buildLiveAdapters(env, clock);
@@ -234,10 +240,14 @@ describe('container', () => {
     expect(adapters.llm).toBeInstanceOf(AnthropicLLM);
     expect(adapters.mailer).toBeInstanceOf(ResendMailer);
     expect(adapters.scheduler).toBeInstanceOf(QstashScheduler);
+    expect(adapters.auth).toBeInstanceOf(SupabaseAuthProvider);
+    expect(adapters.webFetcher).toBeInstanceOf(HttpWebFetcher);
     const db = { close: () => Promise.resolve() } as unknown as Db;
     const deps = createLiveDeps({ env, db, clock, adapters });
     expect(deps.hubspot).toBe(adapters.hubspot);
     expect(deps.scheduler).toBe(adapters.scheduler);
+    expect(deps.auth).toBe(adapters.auth);
+    expect(deps.webFetcher).toBe(adapters.webFetcher);
     expect(() => deps.billing.fetchPlan('plan_x')).toThrow('live_adapter_not_built');
   });
 

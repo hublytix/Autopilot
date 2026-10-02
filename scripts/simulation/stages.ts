@@ -2,12 +2,14 @@
 // enables its checks; earlier stages stay as they are.
 //
 //   M1  boot      fakes + in-memory PGlite (migrated) + FakeClock, fixture portal loaded; no checks
-//   M2  seed      install through the fake consent and the real OAuth callback (branch a), then the
-//                 rest of onboarding by direct inserts; active at 09:04:30 (M3 replaces it: pre-run)
+//   M3  pre-run   the real onboarding 09:00–09:04:30 through the route handlers, page views and
+//                 action bodies (replaced M2's seed helper); background done by 09:06
 //   M2  day-0     submissions #1-#6 from 10:00, webhooks and cron polls; intake + classification checks
-//   M4+ day 0 emails, day 1 … Wednesday, final checks (PLAN §13 calendar)
+//   M4+ day 0 emails, day 1 … Wednesday (PLAN §13 calendar), inserted before `test-lead`
+//   M3  test-lead the onboarding test lead's exclusions, checked last
 import { runDay0 } from './day0';
-import { seedActiveAccount } from './seed';
+import { runPreRun } from './pre-run';
+import { checkTestLeadExclusions } from './test-lead';
 import type { Simulation, Stage } from './types';
 
 const boot: Stage = {
@@ -39,11 +41,11 @@ const boot: Stage = {
   },
 };
 
-/** M2 seed helper, replaced by M3's real onboarding (PLAN §15 M2, D-50). */
-const seed: Stage = {
-  id: 'seed',
-  milestone: 'M2',
-  run: seedActiveAccount,
+/** The real onboarding (PLAN §13 pre-run, §15 M3); it replaced M2's seed helper. */
+const preRun: Stage = {
+  id: 'pre-run',
+  milestone: 'M3',
+  run: runPreRun,
 };
 
 const day0: Stage = {
@@ -54,4 +56,10 @@ const day0: Stage = {
 
 export const BOOT_STAGE: Stage = boot;
 
-export const STAGES: readonly Stage[] = [boot, seed, day0];
+const testLead: Stage = {
+  id: 'test-lead',
+  milestone: 'M3',
+  run: checkTestLeadExclusions,
+};
+
+export const STAGES: readonly Stage[] = [boot, preRun, day0, testLead];

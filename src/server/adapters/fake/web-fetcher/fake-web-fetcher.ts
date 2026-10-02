@@ -1,5 +1,5 @@
 import 'server-only';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { WebFetchError } from '@/server/domain/errors';
 import type { WebFetchErrorCode } from '@/server/domain/types';
@@ -124,6 +124,8 @@ export class FakeWebFetcher implements WebFetcher {
   readonly #blockedHosts: ReadonlySet<string>;
   readonly #routes: Readonly<Record<string, FakeRoute>>;
   #robots: RobotsRules | null = null;
+  /** After preload(): every fixture file by its path relative to the site directory. */
+  #preloaded: Map<string, string> | null = null;
   #inFlight = 0;
   #peakInFlight = 0;
   readonly #log: FakeFetchRecord[] = [];
@@ -138,6 +140,23 @@ export class FakeWebFetcher implements WebFetcher {
     this.#slowPaths = new Set(options.slowPaths ?? ['/slow']);
     this.#blockedHosts = new Set((options.ssrfBlockedHosts ?? FAKE_SSRF_BLOCKED_HOSTS).map((h) => h.toLowerCase()));
     this.#routes = { ...DEFAULT_FAKE_ROUTES, ...options.routes };
+  }
+
+  /**
+   * Reads every fixture file into memory once, so later fetches do no file I/O. Tests that fake
+   * timers use it: their pages then resolve on microtasks alone, never on a real read that could
+   * finish after a fake-time advance.
+   */
+  async preload(): Promise<this> {
+    const files = new Map<string, string>();
+    const entries = await readdir(/*turbopackIgnore: true*/ this.#siteDir, { recursive: true, withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const file = path.join(/*turbopackIgnore: true*/ entry.parentPath, entry.name);
+      files.set(path.relative(this.#siteDir, file).split(path.sep).join('/'), await readFile(/*turbopackIgnore: true*/ file, 'utf8'));
+    }
+    this.#preloaded = files;
+    return this;
   }
 
   /** Every fetch so far, oldest first. */
@@ -260,6 +279,7 @@ export class FakeWebFetcher implements WebFetcher {
   async #readFixture(relative: string): Promise<string | null> {
     const file = path.resolve(this.#siteDir, relative);
     if (!file.startsWith(this.#siteDir + path.sep)) return null;
+    if (this.#preloaded !== null) return this.#preloaded.get(path.relative(this.#siteDir, file).split(path.sep).join('/')) ?? null;
     try {
       return await readFile(/*turbopackIgnore: true*/ file, 'utf8');
     } catch (error) {

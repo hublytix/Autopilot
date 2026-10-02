@@ -25,7 +25,7 @@ function pathFor(outcome: Exclude<InstallOutcome, { type: 'rate_limited' }>): st
     case 'reconnected':
       return RECONNECTED_PATH;
     case 'sign_in_to_reconnect':
-      return SIGN_IN_TO_RECONNECT_PATH;
+      return outcome.linkSent ? `${SIGN_IN_TO_RECONNECT_PATH}?sent=1` : SIGN_IN_TO_RECONNECT_PATH;
     case 'connected_elsewhere':
       return CONNECTED_ELSEWHERE_PATH;
     case 'failed':

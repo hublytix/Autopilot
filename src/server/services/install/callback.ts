@@ -63,7 +63,8 @@ export type InstallFailureReason =
 export type InstallOutcome =
   | { readonly type: 'onboarding'; readonly branch: 'new_portal' | 'unbound'; readonly accountId: string; readonly cookies: readonly SessionCookie[] }
   | { readonly type: 'reconnected'; readonly accountId: string }
-  | { readonly type: 'sign_in_to_reconnect'; readonly accountId: string }
+  /** `linkSent`: a sign-in link was emailed to the owner now (the page says so only then). */
+  | { readonly type: 'sign_in_to_reconnect'; readonly accountId: string; readonly linkSent: boolean }
   | { readonly type: 'connected_elsewhere'; readonly accountId: string }
   | { readonly type: 'rate_limited'; readonly retryAfterSeconds: number }
   | { readonly type: 'failed'; readonly reason: InstallFailureReason };
@@ -376,12 +377,13 @@ async function refuseOwned(deps: Deps, existing: ExistingAccount, installed: Ins
   const installerEmail = installed.info.userEmail;
   if (installerEmail !== null && existing.owner_email !== null && installerEmail.toLowerCase() === existing.owner_email.toLowerCase()) {
     const send = options.sendReconnectMagicLink ?? defaultSendReconnectMagicLink;
+    let linkSent = false;
     try {
-      await send(deps, { accountId });
+      linkSent = await send(deps, { accountId });
     } catch (error) {
       log.warn('reconnect magic link failed', { event: 'install.reconnect_magic_link_failed', accountId, code: errorCode(error) });
     }
-    return { type: 'sign_in_to_reconnect', accountId };
+    return { type: 'sign_in_to_reconnect', accountId, linkSent };
   }
 
   try {

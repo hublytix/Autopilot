@@ -208,12 +208,10 @@ describe('AnthropicLLM.classify: thrown errors (D-24)', () => {
   });
 });
 
-describe('AnthropicLLM: brief and drafts (prompts arrive in M3/M4)', () => {
+describe('AnthropicLLM: drafts (prompts arrive in M4)', () => {
   it('answer fatal_config not_built without calling the API', async () => {
     const { client, calls } = stub(message());
     const adapter = llm(client);
-    const brief = await adapter.generateBrief({ pages: [], sourceUrl: 'https://example.com/' }, { timeoutMs: 50_000, attempt: 0 });
-    expect(brief).toEqual({ ok: false, failure: 'fatal_config', model: SONNET, errorCode: 'not_built' });
     const lead = { firstName: null, company: null, message: null, formName: 'f' };
     const briefDraft = {
       company_name: 'x', one_line: 'x', services: [], who_we_serve: 'x', booking_link: null, tone: { style: 'direct' as const, note: '' },

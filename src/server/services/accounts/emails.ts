@@ -11,6 +11,7 @@ import type { Deps } from '@/server/ports';
 import { NotificationKeys, NotificationPredicates } from '@/server/services/notifications/predicates';
 import { defaultNotificationRegistry, type NotificationRegistry, type NotificationResumer } from '@/server/services/notifications/renderers';
 import type { NotificationSendPlan, RenderedMail } from '@/server/services/notifications/types';
+import { isSettingsChangeAlertKey, resumeSettingsChangeAlert } from '@/server/services/onboarding/change-alerts';
 
 // The account-level owner emails (PLAN §8.4): `reconnect`, `billing_inactive` and `owner_alert`.
 // Each kind has a plan builder (used when the email is first sent) and a resumer that rebuilds the
@@ -173,6 +174,9 @@ export function ownerAlertKey(accountId: string, alertKind: OwnerAlertKind, id: 
 }
 
 const resumeOwnerAlert: NotificationResumer = async (deps, row) => {
+  // Settings-change alerts (M3) share the `owner_alert` kind; services/onboarding rebuilds them. Handled
+  // here too, so the sweeper can resume one whichever registration ran first in this process.
+  if (isSettingsChangeAlertKey(row.dedupeKey)) return resumeSettingsChangeAlert(deps, row);
   const match = /^alert:([0-9a-f-]{36}):([a-z_]+):/.exec(row.dedupeKey);
   const accountId = match?.[1];
   const alertKind = match?.[2];

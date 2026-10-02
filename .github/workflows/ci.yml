@@ -55,6 +55,11 @@ jobs:
         env:
           APP_MODE: fake
 
+      - name: End-to-end onboarding (fake mode, next start, no JavaScript)
+        run: npm run e2e:fake
+        env:
+          APP_MODE: fake
+
       - name: Simulate
         run: npm run simulate
         env:

@@ -145,15 +145,16 @@ describe('simulation stage 1 (M1)', () => {
   });
 });
 
-describe('simulation stage 2 (M2): seed + Day 0 intake', () => {
-  it('passes every check: 6 leads, #3 and #4 filtered, #5 found by the 10:35 cron poll, no historical lead, no email', async () => {
+describe('simulation stages 2 and 3 (M2, M3): the real pre-run + Day 0 intake', () => {
+  it('passes every check: 6 leads, #3 and #4 filtered, #5 found by the 10:35 cron poll, no historical lead, only the 2 pre-run emails', async () => {
     const summary = await run(null);
     expect(summary.checks.filter((check) => !check.ok)).toEqual([]);
     expect(summary.ok).toBe(true);
     expect(summary.stages.map((stage) => [stage.id, stage.milestone])).toEqual([
       ['boot', 'M1'],
-      ['seed', 'M2'],
+      ['pre-run', 'M3'],
       ['day-0', 'M2'],
+      ['test-lead', 'M3'],
     ]);
     expect(summary.leads.map((lead) => [lead.ref, lead.classification, lead.processingState, lead.intakeTrigger, lead.isTest])).toEqual([
       ['L1', 'lead', 'processing', 'webhook', false],
@@ -163,10 +164,56 @@ describe('simulation stage 2 (M2): seed + Day 0 intake', () => {
       ['L5', 'lead', 'processing', 'cron', false],
       ['L6', 'lead', 'processing', 'webhook', false],
     ]);
-    expect(summary.emails).toEqual([]);
+    expect(summary.emails.map((email) => [email.seq, email.at, email.kind, email.lead, email.to, email.file])).toEqual([
+      [1, '2026-10-06T13:00:00.000Z', 'magic_link', null, ['owner@brightside-plumbing.example'], '001-magic_link'],
+      [2, '2026-10-06T13:03:15.000Z', 'inbox_test', null, ['owner@brightside-plumbing.example'], '002-inbox_test'],
+    ]);
     expect(summary.clock).toEqual({ start: '2026-10-06T13:00:00.000Z', end: '2026-10-06T14:41:00.000Z' });
     // No database id (account, lead, job, user) anywhere; the fixture's form ids are UUID-shaped but fixed.
     expect(JSON.stringify(summary).replaceAll(/b1f0c6a2-3d4e-4f50-8a61-7b2c9d0e1f0[1-3]/g, 'form')).not.toMatch(UUID);
+  });
+
+  it('runs the pre-run owner steps at the PLAN §13 times, with the background work done by 09:06', async () => {
+    const summary = await run(null);
+    const preRun = summary.timeline.filter((entry) => entry.stage === 'pre-run' && entry.kind !== 'tick');
+    expect(preRun.map((entry) => [entry.local.slice(15), entry.name])).toEqual([
+      ['09:00:00', 'install.completed'],
+      ['09:00:00', 'onboarding_email.submitted'],
+      ['09:00:30', 'owner.bound'],
+      ['09:01:00', 'brief.generation_requested'],
+      ['09:01:00', 'job.brief_generate'],
+      ['09:01:30', 'forms.selected'],
+      ['09:02:00', 'preferences.saved'],
+      ['09:03:00', 'brief.saved'],
+      ['09:03:15', 'inbox_check.started'],
+      ['09:03:15', 'test_lead.created'],
+      ['09:03:30', 'inbox_test.sent_by_owner'],
+      ['09:04:15', 'job.inbox_check'],
+      ['09:04:30', 'onboarding.completed'],
+      // The baseline job waits for the per-portal limiter's next one-second window (FakeClock).
+      ['09:04:31', 'job.baseline'],
+      ['09:05:00', 'inbox_test.reply_from_test_address'],
+      ['09:05:15', 'job.inbox_check'],
+    ]);
+    expect(preRun.find((entry) => entry.name === 'owner.bound')?.detail).toMatchObject({ via: 'magic_link', freshCookieJar: true, next: '/onboarding/brief' });
+    expect(preRun.find((entry) => entry.name === 'forms.selected')?.detail).toEqual({ selected: ['Contact us', 'Request a quote'], unticked: ['Newsletter signup'] });
+    expect(preRun.filter((entry) => entry.kind === 'job').every((entry) => entry.detail?.jobStatus === 'done')).toBe(true);
+    // The test lead is in no list: not in leads[], and its timeline entry names no lead.
+    expect(summary.leads.some((lead) => lead.isTest)).toBe(false);
+    expect(preRun.find((entry) => entry.name === 'test_lead.created')?.detail).toEqual({ trigger: 'inbox_check' });
+    expect(summary.checks.filter((check) => check.stage === 'pre-run' || check.stage === 'test-lead').map((check) => check.id)).toEqual(
+      expect.arrayContaining([
+        'prerun.owner_foreground_steps_within_5_minutes',
+        'prerun.outbox_is_exactly_magic_link_and_inbox_test',
+        'prerun.magic_link_on_fresh_cookie_jar_binds_owner',
+        'prerun.floors_at_onboarding_complete_0904_30',
+        'prerun.inbox_check_both_legs_log_all',
+        'prerun.baseline_3h30m_and_20_percent',
+        'prerun.no_historical_lead',
+        'test_lead.absent_from_leads',
+        'test_lead.no_lead_or_followup_jobs',
+      ]),
+    );
   });
 
   it('records every tick and intake trigger in time order, events before ticks at the same instant', async () => {

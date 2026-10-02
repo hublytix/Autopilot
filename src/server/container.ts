@@ -129,7 +129,7 @@ async function buildFakeContainer(env: Env, baseClock: Clock): Promise<Container
     box.deps = built.deps;
     persistence = await startFakeStatePersistence<PersistedFakeName>({
       db,
-      sources: { hubspot: built.fakes.hubspot, billing: built.fakes.billing },
+      sources: { hubspot: built.fakes.hubspot, billing: built.fakes.billing, auth: built.fakes.auth },
     });
   } catch (error) {
     await db.close().catch(() => undefined);
@@ -137,12 +137,27 @@ async function buildFakeContainer(env: Env, baseClock: Clock): Promise<Container
   }
   const saved = persistence;
   const restoreLuxon = driveLuxon(clock);
+  // The dev job ticker (PLAN §4): due fake jobs every 10 s and the poll cron once per 5 minutes of
+  // DevClock time. It starts only in fake mode outside Vitest and `next build` (null otherwise).
+  const [{ startDevTickerIfEnabled, stopDevTicker }, { runSweeper }, { runRetentionGuard }] = await Promise.all([
+    import('@/server/services/dev-ticker'),
+    import('@/server/jobs/sweeper'),
+    import('@/server/http/cron-poll'),
+  ]);
+  const ticker = startDevTickerIfEnabled({
+    env,
+    deps: built.deps,
+    scheduler: built.fakes.scheduler,
+    sweep: (d) => runSweeper(d),
+    retentionGuard: runRetentionGuard,
+  });
   return {
     mode: 'fake',
     deps: built.deps,
     fakes: built.fakes,
     devClock: clock,
     close: async () => {
+      await stopDevTicker(ticker);
       await saved.close();
       restoreLuxon();
       await db.close();
@@ -170,12 +185,17 @@ function liveAdapterNotBuilt<T extends object>(): T {
   });
 }
 
-/** The live adapters built so far (PLAN §15): M2 brings HubSpot, the LLM, the mailer and the scheduler. */
+/**
+ * The live adapters built so far (PLAN §15): M2 brings HubSpot, the LLM, the mailer and the
+ * scheduler; M3 the AuthProvider (Supabase) and the WebFetcher (undici behind the SSRF guard).
+ */
 export interface LiveAdapters {
   hubspot: HubSpotClient;
   llm: LLM;
   mailer: Mailer;
   scheduler: Scheduler;
+  auth: AuthProvider;
+  webFetcher: WebFetcher;
 }
 
 /**
@@ -183,12 +203,22 @@ export interface LiveAdapters {
  * imported here, on first use, so fake mode never loads them. Constructing them sends nothing.
  */
 export async function buildLiveAdapters(env: Env, clock: Clock): Promise<LiveAdapters> {
-  const [{ HubSpotHttpClient }, { AnthropicLLM }, { modelParamsConfig }, { ResendMailer }, { QstashScheduler }] = await Promise.all([
+  const [
+    { HubSpotHttpClient },
+    { AnthropicLLM },
+    { modelParamsConfig },
+    { ResendMailer },
+    { QstashScheduler },
+    { createSupabaseAuthProvider },
+    { HttpWebFetcher },
+  ] = await Promise.all([
     import('@/server/adapters/live/hubspot'),
     import('@/server/adapters/live/anthropic-llm'),
     import('@/server/ai/model-params'),
     import('@/server/adapters/live/resend-mailer'),
     import('@/server/adapters/live/qstash-scheduler'),
+    import('@/server/adapters/live/supabase-auth'),
+    import('@/server/adapters/live/http-web-fetcher'),
   ]);
   return {
     hubspot: new HubSpotHttpClient({
@@ -204,6 +234,14 @@ export async function buildLiveAdapters(env: Env, clock: Clock): Promise<LiveAda
     }),
     mailer: new ResendMailer({ apiKey: env.RESEND_API_KEY, from: env.EMAIL_FROM }),
     scheduler: new QstashScheduler({ token: env.QSTASH_TOKEN, baseUrl: env.QSTASH_URL, appUrl: env.APP_URL, clock }),
+    auth: createSupabaseAuthProvider({
+      supabaseUrl: env.SUPABASE_URL,
+      publishableKey: env.SUPABASE_PUBLISHABLE_KEY,
+      secretKey: env.SUPABASE_SECRET_KEY,
+      appUrl: env.APP_URL,
+      clock,
+    }),
+    webFetcher: new HttpWebFetcher({ appUrl: env.APP_URL, clock }),
   };
 }
 
@@ -215,7 +253,7 @@ export interface LiveDepsOptions {
   adapters?: Partial<LiveAdapters> | undefined;
 }
 
-/** Live Deps: SystemClock, Postgres.js and the live adapters given; billing, fetch and auth come in M3+. */
+/** Live Deps: SystemClock, Postgres.js and the live adapters given; billing comes in M7. */
 export function createLiveDeps(options: LiveDepsOptions): Deps {
   const adapters = options.adapters ?? {};
   return {
@@ -227,8 +265,8 @@ export function createLiveDeps(options: LiveDepsOptions): Deps {
     mailer: adapters.mailer ?? liveAdapterNotBuilt<Mailer>(),
     scheduler: adapters.scheduler ?? liveAdapterNotBuilt<Scheduler>(),
     billing: liveAdapterNotBuilt<Billing>(),
-    webFetcher: liveAdapterNotBuilt<WebFetcher>(),
-    auth: liveAdapterNotBuilt<AuthProvider>(),
+    webFetcher: adapters.webFetcher ?? liveAdapterNotBuilt<WebFetcher>(),
+    auth: adapters.auth ?? liveAdapterNotBuilt<AuthProvider>(),
   };
 }
 

@@ -27,6 +27,29 @@ describe('file layout', () => {
     'src/app/api/jobs/run/route.ts',
     'src/app/api/jobs/failed/route.ts',
     'src/app/dev/fake-hubspot/authorize/page.tsx',
+    // M3 (PLAN §7.2, §7.3, §7.4, §7.5, §7.7): the proxy sits next to src/app, never at the root.
+    'src/proxy.ts',
+    'src/app/login/page.tsx',
+    'src/app/auth/confirm/route.ts',
+    'src/app/auth/signout/route.ts',
+    'src/app/auth/error/page.tsx',
+    'src/app/onboarding/layout.tsx',
+    'src/app/onboarding/email/page.tsx',
+    'src/app/onboarding/brief/page.tsx',
+    'src/app/onboarding/forms/page.tsx',
+    'src/app/onboarding/preferences/page.tsx',
+    'src/app/onboarding/inbox/page.tsx',
+    'src/app/onboarding/baseline/page.tsx',
+    // The /dashboard placeholder Finish lands on until M6 builds the dashboard.
+    'src/app/dashboard/page.tsx',
+    'src/app/api/onboarding/status/route.ts',
+    'src/app/a/[token]/send/route.ts',
+    'src/app/a/[token]/beacon/route.ts',
+    'src/app/a/[token]/copy/page.tsx',
+    'src/app/a/[token]/verify-notify/page.tsx',
+    'src/server/security/ssrf.ts',
+    'src/server/security/csp.ts',
+    'src/server/security/same-origin.ts',
   ])('has %s', (file) => {
     expect(exists(file)).toBe(true);
   });

@@ -158,6 +158,8 @@ interface LeadRow {
 }
 
 export async function runDay0(sim: Simulation): Promise<void> {
+  const emailsBefore = sim.fakes.mailer.sent.length;
+  const aiCallsBefore = (await sim.db.one<{ n: number }>('select count(*)::int as n from public.ai_calls')).n;
   for (const submission of DAY0_SUBMISSIONS) {
     sim.travel.at(sim.local(submission.at), `submission #${submission.n}`, () => submit(sim, submission));
   }
@@ -203,7 +205,9 @@ export async function runDay0(sim: Simulation): Promise<void> {
   const historical = floor === null ? leads.length : leads.filter((row) => row.submitted_at.getTime() <= floor.getTime()).length;
   sim.check('day0.no_historical_lead', floor !== null && historical === 0, `${historical} leads submitted before the floor`);
 
-  sim.check('day0.no_emails_yet', sim.fakes.mailer.sent.length === 0, `${sim.fakes.mailer.sent.length} emails`);
+  // The drafts and their new_lead emails arrive in M4.
+  const day0Emails = sim.fakes.mailer.sent.length - emailsBefore;
+  sim.check('day0.no_emails_yet', day0Emails === 0, `${day0Emails} emails`);
 
   const unfinished = await sim.db.query<{ kind: string; status: string }>(
     `select kind, status from public.scheduled_jobs where status not in ('done', 'cancelled', 'skipped') order by kind, status`,
@@ -215,9 +219,9 @@ export async function runDay0(sim: Simulation): Promise<void> {
   );
   sim.check('day0.no_pending_deliveries', sim.fakes.scheduler.pending().length === 0, `${sim.fakes.scheduler.pending().length} queued`);
 
-  const aiCalls = await sim.db.query<{ purpose: string; model: string; outcome: string }>(
-    `select purpose, model, outcome from public.ai_calls order by created_at, purpose`,
-  );
+  const aiCalls = (
+    await sim.db.query<{ purpose: string; model: string; outcome: string }>(`select purpose, model, outcome from public.ai_calls order by created_at, purpose`)
+  ).slice(aiCallsBefore);
   const fast = sim.deps.env.ANTHROPIC_MODEL_FAST;
   sim.check(
     'day0.classification_calls_use_the_fast_model',

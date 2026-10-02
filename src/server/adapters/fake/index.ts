@@ -30,8 +30,8 @@ export interface FakeAdapters {
   readonly auth: FakeAuthProvider;
 }
 
-/** The fakes whose state fake mode keeps in `fake.state` across restarts (PLAN §4, D-29). */
-export const PERSISTED_FAKES = ['hubspot', 'billing'] as const;
+/** The fakes whose state fake mode keeps in `fake.state` across restarts (PLAN §4, D-29): portal, subscriptions, auth users and sessions. */
+export const PERSISTED_FAKES = ['hubspot', 'billing', 'auth'] as const;
 export type PersistedFakeName = (typeof PERSISTED_FAKES)[number];
 
 export interface FakeDepsOptions {
@@ -153,11 +153,15 @@ export function createFakeDeps(options: FakeDepsOptions): FakeDeps {
       }),
     ),
     webFetcher: new FakeWebFetcher({ siteDir: options.siteDir }),
-    auth: new FakeAuthProvider({
-      clock,
-      sessionSigningKey: deriveKey(env.APP_SECRET, 'fake-session'),
-      secureCookies: env.APP_URL.startsWith('https:'),
-    }),
+    // Persisted too: a dev restart must keep the bound owner's auth user and sessions (users.auth_user_id).
+    auth: persisted(
+      'auth',
+      new FakeAuthProvider({
+        clock,
+        sessionSigningKey: deriveKey(env.APP_SECRET, 'fake-session'),
+        secureCookies: env.APP_URL.startsWith('https:'),
+      }),
+    ),
   };
   const deps: Deps = {
     env,

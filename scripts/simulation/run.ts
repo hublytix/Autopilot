@@ -13,8 +13,10 @@ import { createPgliteDb, type PgliteDb } from '@/server/db/pglite';
 import { parseEnv, type Env } from '@/server/env';
 import { CRON_POLL_PATH, handleCronPoll } from '@/server/http/cron-poll';
 import { createSchedulerBridge } from '@/server/jobs/bridge';
+import { createJobHandlerRegistries } from '@/server/jobs/handlers';
 import type { Deps } from '@/server/ports';
 import { DAILY_0317_UTC, EVERY_5_MINUTES, HOURLY, TimeTravel, type CronSeries } from './engine';
+import { summaryLeadRows } from './leads';
 import { STAGES } from './stages';
 import type {
   CheckResult,
@@ -76,32 +78,19 @@ function refNumber(ref: string): number {
 
 /**
  * The leads, labelled: a lead the scenario declared keeps its ref (`L5` is submission #5); any
- * other lead gets the next free `L{n}` in the stable order (submitted_at, contact, form, is_test).
- * Returned in ref order, with the map from lead id to ref.
+ * other lead gets the next free `L{n}` in the stable order (submitted_at, contact, form). The
+ * onboarding test lead is left out (leads.ts). Returned in ref order, with the map from lead id to ref.
  */
 async function readLeads(
   db: PgliteDb,
   declared: ReadonlyMap<string, string>,
 ): Promise<{ leads: LeadSummary[]; refById: ReadonlyMap<string, string> }> {
-  const rows = await db.query<{
-    id: string;
-    hubspot_contact_id: string | null;
-    form_id: string | null;
-    submitted_at: Date;
-    intake_trigger: string;
-    is_test: boolean;
-    classification: string | null;
-    processing_state: string;
-    stop_reason: string | null;
-  }>(
-    `select id, hubspot_contact_id, form_id, submitted_at, intake_trigger, is_test, classification, processing_state, stop_reason
-       from public.leads order by submitted_at, hubspot_contact_id nulls last, form_id nulls last, is_test`,
-  );
+  const rows = await summaryLeadRows(db);
   const used = new Set(declared.values());
   const refById = new Map<string, string>();
   let next = 1;
   for (const row of rows) {
-    let ref = row.is_test || row.hubspot_contact_id === null ? undefined : declared.get(declaredLeadKey(row.hubspot_contact_id, row.submitted_at));
+    let ref = row.hubspot_contact_id === null ? undefined : declared.get(declaredLeadKey(row.hubspot_contact_id, row.submitted_at));
     if (ref === undefined) {
       while (used.has(`L${next}`)) next += 1;
       ref = `L${next}`;
@@ -212,17 +201,26 @@ export async function runSimulation(options: RunOptions): Promise<SimulationSumm
       for (const row of rows) {
         if (seenLeads.has(row.id)) continue;
         seenLeads.add(row.id);
-        record('intake', 'lead.created', { lead: null, trigger: row.intake_trigger, isTest: row.is_test }, row.id);
+        // The inbox check's test lead is in no list (PLAN §13): it is noted without a ref.
+        if (row.is_test) record('intake', 'test_lead.created', { trigger: row.intake_trigger });
+        else record('intake', 'lead.created', { lead: null, trigger: row.intake_trigger, isTest: false }, row.id);
       }
     };
 
     // The fake QStash delivers to runJob through the same bridge fake mode uses (/api/jobs/run and
     // /api/jobs/failed without HTTP); each delivery and failure callback is recorded.
     const box: { deps?: Deps | undefined } = {};
+    // Every registered handler; the ones that call HubSpot wait for the per-portal limiter's next
+    // window on the FakeClock (as the poll cron's sleep does below), never on the wall clock.
+    const registries = createJobHandlerRegistries({
+      limiterSleep: async (ms) => {
+        clock.advance(ms);
+      },
+    });
     const bridge = createSchedulerBridge(() => {
       if (box.deps === undefined) throw new Error('simulation_not_ready');
       return box.deps;
-    });
+    }, registries.jobs);
     const jobRow = (jobId: string) =>
       db.maybeOne<{ status: string; lead_id: string | null }>('select status, lead_id from public.scheduled_jobs where id = $1', [jobId]);
     const dispatch = async (delivery: FakeDelivery): Promise<{ status: number; headers: Headers }> => {

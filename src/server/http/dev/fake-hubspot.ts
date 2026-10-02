@@ -2,7 +2,7 @@ import 'server-only';
 import { z } from 'zod';
 import { log } from '@/server/obs/log';
 import { devNotFound, devPlainResponse, getDevContext, type DevContext } from './guard';
-import { isSameOriginRequest } from './same-origin';
+import { isSameOriginRequest } from '@/server/security/same-origin';
 
 // The fake HubSpot consent page (PLAN §4, §7.6, D-29): `/dev/fake-hubspot/authorize` is where the
 // fake's `authorizeUrl` sends the installer. The page shows the requested scopes with Approve and
