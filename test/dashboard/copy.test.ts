@@ -39,12 +39,20 @@ describe('dashboard banners', () => {
     if (link !== undefined) expect(existsSync(servedBy(link.href)), link.href).toBe(true);
   });
 
-  it('offers no billing link until the billing page exists (M7), and promises no action it cannot take', () => {
-    for (const banner of BANNERS.filter((b) => b.type === 'billing_inactive' || b.type === 'payment_grace' || b.type === 'trial_ending')) {
+  it('sends every billing banner to the billing page, which exists (M7)', () => {
+    const billing = BANNERS.filter((b) => b.type === 'billing_inactive' || b.type === 'payment_grace' || b.type === 'trial_ending');
+    expect(billing).toHaveLength(3);
+    for (const banner of billing) {
       const copy = bannerCopy(banner);
-      expect(copy.link === undefined || existsSync(servedBy(copy.link.href))).toBe(true);
-      expect(copy.lines.join(' ')).not.toMatch(/Go to billing/);
+      expect(copy.link).toEqual({ href: '/dashboard/billing', label: 'Go to billing' });
+      expect(existsSync(servedBy('/dashboard/billing'))).toBe(true);
     }
+  });
+
+  it('names the action that fits each billing banner', () => {
+    expect(bannerCopy({ type: 'billing_inactive' }).lines.join(' ')).toContain('Subscribe to start again');
+    expect(bannerCopy({ type: 'payment_grace', until: '9 Oct 2026' }).lines.join(' ')).toContain('Update your payment method');
+    expect(bannerCopy({ type: 'trial_ending', daysLeft: 2 }).lines.join(' ')).toContain('until you subscribe');
   });
 
   it('words the logging limits as limits: a send or reply may simply not be logged', () => {

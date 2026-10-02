@@ -16,7 +16,8 @@ import { scheduleDay0OwnerActions } from './day0-owner';
 import { DAY0_END, DAY0_NOTIFIED, DAY0_SUBMISSIONS, type ScenarioSubmission } from './day0-scenario';
 import type { Simulation } from './types';
 
-async function submit(sim: Simulation, submission: ScenarioSubmission): Promise<void> {
+/** One scenario submission through the fake portal, and its signed webhook when HubSpot sends one (the M7 variants reuse it). */
+export async function submit(sim: Simulation, submission: ScenarioSubmission): Promise<void> {
   const { hubspot } = sim.fakes;
   const result = hubspot.submitForm({
     formId: hubspot.formIdByName(submission.form),

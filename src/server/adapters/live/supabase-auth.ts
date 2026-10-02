@@ -44,7 +44,7 @@ const generatedLinkSchema = z.object({
 const storedSessionSchema = z.object({ access_token: z.string().min(1), expires_at: z.number().optional() });
 const claimsSchema = z.object({ sub: z.string().min(1), email: z.string().optional() });
 
-type AuthStep = 'create_user' | 'delete_user' | 'generate_link' | 'find_user' | 'verify' | 'claims' | 'refresh' | 'sign_out';
+type AuthStep = 'create_user' | 'delete_user' | 'get_user' | 'generate_link' | 'find_user' | 'verify' | 'claims' | 'refresh' | 'sign_out';
 
 /** Maps a supabase-js error to our hierarchy (codes only). */
 function mapAuthError(error: unknown, step: AuthStep): Error {
@@ -149,6 +149,17 @@ export class SupabaseAuthProvider implements AuthProvider {
       if (users.data.length < USER_LOOKUP_PAGE_SIZE) return null;
     }
     throw new PermanentError('auth_user_lookup_too_large');
+  }
+
+  async getUserEmail(userId: string): Promise<string | null> {
+    const { data, error } = await this.#adminClient().auth.admin.getUserById(userId);
+    if (error !== null) {
+      if (isAuthApiError(error) && (error.status === 404 || error.code === 'user_not_found')) return null;
+      throw mapAuthError(error, 'get_user');
+    }
+    const user = userSchema.safeParse(data.user);
+    if (!user.success) throw new TransientError('auth_invalid_response');
+    return user.data.email?.toLowerCase() ?? null;
   }
 
   async deleteUser(userId: string): Promise<void> {

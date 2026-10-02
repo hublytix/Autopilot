@@ -6,6 +6,7 @@ import { withSetCookies } from '@/server/security/cookies';
 import { generateNonce, NONCE_HEADER } from '@/server/security/csp';
 import { confirmMagicLink, type ConfirmOutcome } from '@/server/services/auth/confirm';
 import { isSameOriginRequest } from '@/server/security/same-origin';
+import { readBoundedText } from '../bounded-body';
 import { clientIp } from '../hubspot-install';
 import { escapeHtml, htmlPage } from './html';
 import { PRIVATE_HEADERS } from './request';
@@ -97,8 +98,8 @@ async function readForm(req: Request): Promise<FormData | null> {
   const type = req.headers.get('content-type') ?? '';
   if (!type.startsWith('application/x-www-form-urlencoded') && !type.startsWith('multipart/form-data')) return null;
   try {
-    const text = await req.text();
-    if (text.length > MAX_BODY_BYTES) return null;
+    const text = await readBoundedText(req, MAX_BODY_BYTES);
+    if (text === null) return null;
     return await new Request(req.url, { method: 'POST', headers: { 'content-type': type }, body: text }).formData();
   } catch {
     return null;

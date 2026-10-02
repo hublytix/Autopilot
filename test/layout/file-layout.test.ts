@@ -56,6 +56,21 @@ describe('file layout', () => {
     'src/server/security/ssrf.ts',
     'src/server/security/csp.ts',
     'src/server/security/same-origin.ts',
+    // M7 (PLAN §7.3, §7.5, §7.6): billing, the daily cron, settings, disconnect and /admin.
+    'src/app/api/cron/daily/route.ts',
+    'src/app/api/razorpay/webhook/route.ts',
+    'src/app/api/billing/checkout/route.ts',
+    'src/app/api/billing/resume/route.ts',
+    'src/app/api/billing/cancel/route.ts',
+    'src/app/dashboard/billing/page.tsx',
+    'src/app/dashboard/billing/checkout/page.tsx',
+    'src/app/dashboard/settings/page.tsx',
+    'src/app/dashboard/settings/forms/page.tsx',
+    'src/app/dashboard/settings/disconnect/page.tsx',
+    'src/app/admin/page.tsx',
+    'src/app/dev/fake-checkout/[id]/page.tsx',
+    'src/app/dev/fake-checkout/[id]/decision/route.ts',
+    'src/server/security/razorpay-signature.ts',
   ])('has %s', (file) => {
     expect(exists(file)).toBe(true);
   });
@@ -81,8 +96,8 @@ describe('file layout', () => {
     expect(exists(file)).toBe(false);
   });
 
-  // PLAN §8.1: the three periodic triggers (UTC), declared for Vercel Pro. The poll route arrived in
-  // M2 and the weekly report route in M6 (listed above); the daily route (M7) joins the list when it lands.
+  // PLAN §8.1: the three periodic triggers (UTC), declared for Vercel Pro (scripts/qstash-schedules.ts
+  // mirrors them; its own test compares the two).
   it('vercel.json declares exactly the PLAN §8.1 cron schedules', () => {
     const config = JSON.parse(readFileSync(path.join(root, 'vercel.json'), 'utf8')) as { crons?: unknown };
     expect(config.crons).toEqual([
@@ -90,5 +105,17 @@ describe('file layout', () => {
       { path: '/api/cron/weekly-report', schedule: '0 * * * *' },
       { path: '/api/cron/daily', schedule: '17 3 * * *' },
     ]);
+  });
+
+  // Vercel Cron calls GET; a QStash schedule POSTs (D-16). Each declared path needs both handlers.
+  it('every vercel.json cron path has a route file with GET and POST', () => {
+    const config = JSON.parse(readFileSync(path.join(root, 'vercel.json'), 'utf8')) as { crons: { path: string }[] };
+    for (const cron of config.crons) {
+      const file = path.join(root, 'src/app', cron.path, 'route.ts');
+      expect(existsSync(file), cron.path).toBe(true);
+      const source = readFileSync(file, 'utf8');
+      expect(source, cron.path).toMatch(/export async function GET\(/);
+      expect(source, cron.path).toMatch(/export async function POST\(/);
+    }
   });
 });

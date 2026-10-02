@@ -54,9 +54,9 @@ export interface BannerCopy {
 
 const INSTALL_PATH = '/api/hubspot/install';
 const INBOX_CHECK_PATH = '/onboarding/inbox';
-// The billing banners name no action link: /dashboard/billing arrives with M7 (PLAN §15), and a link
-// to a page that doesn't exist yet would promise what the build doesn't do (law 5). M7 adds the link
-// ("Go to billing") and the Subscribe / Update payment method actions with the page.
+// The billing banners link to /dashboard/billing (M7), where the one action that fits is offered:
+// Subscribe, Update payment method, Resume or Cancel.
+const BILLING_LINK = { href: '/dashboard/billing', label: 'Go to billing' } as const;
 
 const RECONNECT_LINK = { href: INSTALL_PATH, label: 'Reconnect HubSpot', plain: true } as const;
 
@@ -88,19 +88,28 @@ export function bannerCopy(banner: DashboardBanner): BannerCopy {
       return {
         tone: 'error',
         title: 'Billing inactive',
-        lines: ["Your free trial or subscription has ended, so new leads aren't read or drafted until you subscribe."],
+        lines: [
+          "Your free trial or subscription has ended, so new leads aren't read or drafted.",
+          "Subscribe to start again, or update your payment method if a payment didn't go through.",
+        ],
+        link: BILLING_LINK,
       };
     case 'payment_grace':
       return {
         tone: 'warning',
         title: "Your last payment didn't go through",
-        lines: [`Autopilot keeps running until ${banner.until}. If the payment still hasn't gone through by then, new leads aren't read or drafted.`],
+        lines: [
+          `Autopilot keeps running until ${banner.until}. If the payment still hasn't gone through by then, new leads aren't read or drafted.`,
+          'Update your payment method to keep it running.',
+        ],
+        link: BILLING_LINK,
       };
     case 'trial_ending':
       return {
         tone: 'info',
         title: `Your free trial ends in ${plural(banner.daysLeft, 'day', 'days')}`,
-        lines: ["After it ends, new leads aren't read or drafted until you subscribe."],
+        lines: ["After it ends, new leads aren't read or drafted until you subscribe. Subscribe now to keep it running."],
+        link: BILLING_LINK,
       };
     case 'paused':
       return {

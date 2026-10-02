@@ -38,7 +38,7 @@ APP_MODE=fake npm run dev    # http://localhost:3000
 npm run simulate             # scripted scenario on fakes
 ```
 
-`npm run simulate` writes its results to `./outbox/`: `summary.json` (timeline, emails, leads, weekly report, checks, `ok`) and, as later milestones add them, every rendered email as `NNN-<kind>-<lead>.html` and `.txt`. It exits non-zero when a check fails. The full scenario is described in [`docs/PLAN.md` §13](docs/PLAN.md#13-simulation-npm-run-simulate-d-39).
+`npm run simulate` writes its results to `./outbox/`: `summary.json` (timeline, emails, leads, weekly report, checks, `ok`) and every rendered email as `NNN-<kind>-<lead>.html` and `.txt`. The variant scenarios (`daily-cap`, `billing`, `lapse`, `disconnect`) run in parallel processes and write the same files into `./outbox/<variant>/`. It exits non-zero when a check fails. The full scenario is described in [`docs/PLAN.md` §13](docs/PLAN.md#13-simulation-npm-run-simulate-d-39).
 
 `.env.example` lists every variable with a one-line comment. Copy it to `.env.local` only to override something. Never commit real values.
 

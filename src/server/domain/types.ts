@@ -53,8 +53,8 @@ export const RAZORPAY_SUBSCRIPTION_STATUSES = [
 export type RazorpaySubscriptionStatus = (typeof RAZORPAY_SUBSCRIPTION_STATUSES)[number];
 export const isRazorpaySubscriptionStatus = isOneOf(RAZORPAY_SUBSCRIPTION_STATUSES);
 
-/** `subscriptions.status`: Razorpay's nine plus the local `stale` (D-18). */
-export const SUBSCRIPTION_STATUSES = [...RAZORPAY_SUBSCRIPTION_STATUSES, 'stale'] as const;
+/** `subscriptions.status`: Razorpay's nine plus the local `stale` (an unfinished checkout we stopped using, D-18) and `unknown` (a status Razorpay doesn't document, D-82). */
+export const SUBSCRIPTION_STATUSES = [...RAZORPAY_SUBSCRIPTION_STATUSES, 'stale', 'unknown'] as const;
 export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
 export const isSubscriptionStatus = isOneOf(SUBSCRIPTION_STATUSES);
 

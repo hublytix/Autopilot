@@ -17,7 +17,9 @@ jobs:
   gates:
     name: typecheck · lint · test · build · bundle check · smoke · simulate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The M7 simulation variants (billing, lapse, disconnect) let two to five weeks of 5-minute ticks
+    # go by on PGlite, in the test suite (under the 2030 system time) and in `npm run simulate`.
+    timeout-minutes: 45
     env:
       NEXT_TELEMETRY_DISABLED: '1'
     steps:
@@ -65,11 +67,11 @@ jobs:
         env:
           APP_MODE: fake
 
-      - name: Upload simulation summary
+      - name: Upload simulation summaries
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: simulation-summary
-          path: outbox/summary.json
+          path: outbox/**/summary.json
           if-no-files-found: warn
           retention-days: 14

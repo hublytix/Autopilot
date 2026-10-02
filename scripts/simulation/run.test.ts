@@ -146,9 +146,9 @@ describe('simulation stage 1 (M1)', () => {
   });
 });
 
-// The full run takes a while (eight simulated days of 5-minute polls), so the stage 2–6 tests share
+// The full run takes a while (eight simulated days of 5-minute polls), so the stage 2–7 tests share
 // one run (and its outbox directory); the 2030 run is the only other full run.
-describe('simulation stages 2–6 (M2–M6): the real pre-run, Day 0 intake, drafts, new_lead emails, action links, follow-ups, the reply, the Monday report and the dashboard', () => {
+describe('simulation stages 2–7 (M2–M7): the real pre-run, Day 0 intake, drafts, new_lead emails, action links, follow-ups, the reply, the Monday report, the dashboard and the daily maintenance', () => {
   let fullDir: string;
   let summary: SimulationSummary;
 
@@ -181,6 +181,7 @@ describe('simulation stages 2–6 (M2–M6): the real pre-run, Day 0 intake, dra
       ['monday', 'M6'],
       ['wednesday', 'M6'],
       ['test-lead', 'M3'],
+      ['daily-maintenance', 'M7'],
     ]);
     expect(summary.leads.map((lead) => [lead.ref, lead.classification, lead.processingState, lead.intakeTrigger, lead.isTest, lead.stopReason])).toEqual([
       ['L1', 'lead', 'notified', 'webhook', false, null],
@@ -296,7 +297,7 @@ describe('simulation stages 2–6 (M2–M6): the real pre-run, Day 0 intake, dra
     expect(summary.timeline.filter((entry) => entry.name === 'cron.poll')).toHaveLength((8 * 24 * 60 + 180) / 5 + 1);
     // The hourly due-check (M6): nothing is due until Monday 08:00 local, which creates the report;
     // the rest of Monday finds it existing; Tuesday and Wednesday are not due. The daily 03:17 UTC
-    // run (M7) is still recorded as a no-op.
+    // run (M7) goes through the real route: one account_daily job a day, done, sending nothing.
     const weekly = summary.timeline.filter((entry) => entry.name === 'cron.weekly_report');
     expect(weekly.slice(0, 2).map((entry) => entry.local.slice(15, 20))).toEqual(['09:00', '10:00']);
     expect(weekly).toHaveLength(8 * 24 + 4);
@@ -309,7 +310,20 @@ describe('simulation stages 2–6 (M2–M6): the real pre-run, Day 0 intake, dra
     const daily = summary.timeline.filter((entry) => entry.name === 'cron.daily');
     expect(daily.map((entry) => entry.at.slice(0, 10))).toEqual(['2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14']);
     expect(daily.every((entry) => entry.at.endsWith('T03:17:00.000Z'))).toBe(true);
-    expect(daily.every((entry) => entry.detail?.handler === 'none_until_m7')).toBe(true);
+    expect(daily.every((entry) => entry.detail?.httpStatus === 200 && entry.detail.status === 'ran' && entry.detail.errors === 0 && entry.detail.jobsCreated === 1)).toBe(true);
+    const dailyJobs = summary.timeline.filter((entry) => entry.name === 'job.account_daily');
+    expect(dailyJobs.map((entry) => [entry.at, entry.detail?.jobStatus, entry.detail?.emailsSent, entry.detail?.leadsRead])).toEqual(
+      daily.map((entry, i) => [entry.at, 'done', 0, i < 5 ? 0 : 3]),
+    );
+    expect(summary.checks.filter((check) => check.stage === 'daily-maintenance').map((check) => [check.id, check.ok])).toEqual([
+      ['daily.ticks_every_day_at_0317_utc_through_the_real_route', true],
+      ['daily.one_account_daily_job_per_day_for_the_account', true],
+      ['daily.every_account_daily_job_done_right_after_its_tick', true],
+      ['daily.account_daily_sends_nothing', true],
+      ['daily.signal_refresh_reads_only_leads_whose_follow_ups_are_over', true],
+      ['daily.retention_keeps_the_weeks_content', true],
+      ['daily.lead_content_still_stored_within_30_days', true],
+    ]);
 
     const intake = summary.timeline.filter((entry) => entry.name === 'lead.created').map((entry) => [entry.local.slice(15, 20), entry.detail?.lead, entry.detail?.trigger]);
     expect(intake).toEqual([
@@ -431,7 +445,8 @@ describe('simulation stages 2–6 (M2–M6): the real pre-run, Day 0 intake, dra
       events: { repliesFromLeads: 1, followUpsDrafted: 7 },
       comparison: { baseline: 'ok', baselineMedianSeconds: 3.5 * 3600, baselinePercentWithoutReply: 20, medianSeconds: 21 * 60, percentWithoutReply: 25, population: 4, withoutReply: 1 },
     });
-    const steps = summary.timeline.filter((entry) => (entry.stage === 'monday' || entry.stage === 'wednesday') && entry.kind !== 'tick');
+    // (The daily maintenance's own account_daily jobs are checked by the daily-maintenance stage.)
+    const steps = summary.timeline.filter((entry) => (entry.stage === 'monday' || entry.stage === 'wednesday') && entry.kind !== 'tick' && entry.name !== 'job.account_daily');
     expect(steps.map((entry) => [entry.local, entry.name, entry.detail?.jobStatus ?? entry.detail?.from ?? null])).toEqual([
       ['Mon 2026-10-12 08:15:03', 'job.weekly_report', 'done'],
       ['Mon 2026-10-12 09:30:00', 'dashboard.opened_by_owner', 'weekly_report'],

@@ -54,6 +54,12 @@ export interface AuthProvider {
   deleteUser(userId: string): Promise<void>;
 
   /**
+   * A user's address (lower-cased) by id; null when no such user exists. The guarded deletes use it
+   * when we no longer store the address (D-82): never logged, never stored.
+   */
+  getUserEmail(userId: string): Promise<string | null>;
+
+  /**
    * Mints a magic-link token for an existing user without sending anything; the caller emails
    * `${APP_URL}/auth/confirm#th=<hashedToken>&type=email` through the Mailer. Call it only for an
    * existing user: live Supabase silently creates unknown ones (D-22).

@@ -3,6 +3,14 @@ import 'server-only';
 // Sign-in and ownership (PLAN §7.2, §9.1 step 2, §10.3, D-22, D-35, D-36): magic links with login
 // intents, /login, POST /auth/confirm (with the one-statement owner bind), the onboarding email step,
 // and requireOwner/requireAdmin, the only source of an OwnerScope. Import from here.
+export {
+  AUTH_USER_DELETION_LIMIT,
+  authUserReference,
+  deleteAuthUserUnlessReferenced,
+  queueAuthUserDeletion,
+  retryAuthUserDeletions,
+} from './auth-user-deletion';
+export type { AuthUserDeleteOutcome, AuthUserDeletionSummary, AuthUserReference, AuthUserTarget } from './auth-user-deletion';
 export { bindOwner, confirmMagicLink } from './confirm';
 export type { BindResult, ConfirmInput, ConfirmOutcome } from './confirm';
 export {

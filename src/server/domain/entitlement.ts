@@ -8,10 +8,13 @@ import { isSubscriptionStatus, type SubscriptionStatus } from './types';
 // - trialing: `now < trial_ends_at` (the trial counts from the portal's first install, D-30);
 // - `authenticated` covers a subscription that starts at the end of the trial (D-20);
 // - `pending` is entitled only inside its 3-day grace (`grace_until = payment_failed_at + 3 d`);
-// - `created`, `stale`, `halted`, `paused`, `cancelled`, `completed`, `expired` and any unknown
-//   status are not entitled (an unknown one also warrants an admin alert, which the caller raises);
+// - `created`, `stale`, `unknown`, `halted`, `paused`, `cancelled`, `completed`, `expired` and any
+//   status not in the list are not entitled (the stored `unknown`, D-82, was alerted when Razorpay
+//   reported it; a value outside the list here also warrants an alert, which the caller raises);
 // - Razorpay's `resumed` means `active` (RZP-STATUS-MAPPING).
-// The current subscription is the one with the latest logical `created_at`.
+// The current subscription is the newest row (logical `created_at`) that still holds a mandate
+// (authenticated, active, pending, halted, paused), else the newest row (D-81: PLAN §9.9's "latest
+// logical created_at", kept for every account the checkout guard allows, plus the safety net's case).
 
 /** The account fields entitlement reads. */
 export interface EntitlementAccount {
@@ -59,10 +62,18 @@ export function normalizeSubscriptionStatus(raw: string): SubscriptionStatus | n
 }
 
 /**
- * The current subscription: the latest logical `created_at`; ties (one transaction inserting two)
- * go to the larger id, so the choice never depends on row order.
+ * Statuses that still hold a mandate (the checkout guard's blocking set, D-18). The guard never lets
+ * a new row be created while one exists, so a newer row beside such a row is an anomaly: a second
+ * subscription the safety net cancels (PLAN §9.9 keeps the older one), or an old link authorised late.
  */
-export function currentSubscription<S extends SubscriptionSnapshot>(subscriptions: readonly S[]): S | null {
+const MANDATE: ReadonlySet<SubscriptionStatus> = new Set<SubscriptionStatus>(['authenticated', 'active', 'pending', 'halted', 'paused']);
+
+function holdsMandate(subscription: SubscriptionSnapshot): boolean {
+  const status = normalizeSubscriptionStatus(subscription.status);
+  return status !== null && MANDATE.has(status);
+}
+
+function newest<S extends SubscriptionSnapshot>(subscriptions: readonly S[]): S | null {
   let current: S | null = null;
   for (const subscription of subscriptions) {
     if (
@@ -74,6 +85,16 @@ export function currentSubscription<S extends SubscriptionSnapshot>(subscription
     }
   }
   return current;
+}
+
+/**
+ * The current subscription: the newest row (latest logical `created_at`; ties, one transaction
+ * inserting two, go to the larger id, so the choice never depends on row order) that still holds a
+ * mandate, else the newest row of all. So a newer row the second-subscription safety net cancelled,
+ * or a newer `created` row beside an older one authorised late, never hides the one that pays (D-81).
+ */
+export function currentSubscription<S extends SubscriptionSnapshot>(subscriptions: readonly S[]): S | null {
+  return newest(subscriptions.filter(holdsMandate)) ?? newest(subscriptions);
 }
 
 /** Entitlement with its reason. `subscription` is the current one (see currentSubscription), or null. */

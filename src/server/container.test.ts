@@ -17,6 +17,7 @@ import { QstashScheduler } from '@/server/adapters/live/qstash-scheduler';
 import { ResendMailer } from '@/server/adapters/live/resend-mailer';
 import { HttpWebFetcher } from '@/server/adapters/live/http-web-fetcher';
 import { SupabaseAuthProvider } from '@/server/adapters/live/supabase-auth';
+import { RazorpayBilling } from '@/server/adapters/live/razorpay-billing';
 import { insertJob, publishJobs } from '@/server/jobs';
 import { seedAccount } from '@/server/jobs/testing';
 import { buildContainer, buildLiveAdapters, createLiveDeps, getContainer, getDeps, resetContainer } from './container';
@@ -232,7 +233,7 @@ describe('container', () => {
     expect(store.__autopilot).toBeUndefined();
   });
 
-  it('live mode: HubSpot, the LLM, the mailer, the scheduler, auth and the web fetcher use their live adapters (built without any network call)', async () => {
+  it('live mode: HubSpot, the LLM, the mailer, the scheduler, auth, the web fetcher and billing use their live adapters (built without any network call)', async () => {
     const env = parseEnv({ APP_MODE: 'fake' });
     const clock = new FakeClock(new Date('2026-10-06T13:00:00.000Z'));
     const adapters = await buildLiveAdapters(env, clock);
@@ -242,13 +243,14 @@ describe('container', () => {
     expect(adapters.scheduler).toBeInstanceOf(QstashScheduler);
     expect(adapters.auth).toBeInstanceOf(SupabaseAuthProvider);
     expect(adapters.webFetcher).toBeInstanceOf(HttpWebFetcher);
+    expect(adapters.billing).toBeInstanceOf(RazorpayBilling);
     const db = { close: () => Promise.resolve() } as unknown as Db;
     const deps = createLiveDeps({ env, db, clock, adapters });
     expect(deps.hubspot).toBe(adapters.hubspot);
     expect(deps.scheduler).toBe(adapters.scheduler);
     expect(deps.auth).toBe(adapters.auth);
     expect(deps.webFetcher).toBe(adapters.webFetcher);
-    expect(() => deps.billing.fetchPlan('plan_x')).toThrow('live_adapter_not_built');
+    expect(deps.billing).toBe(adapters.billing);
   });
 
   it('live mode: ports without a live adapter throw ConfigError live_adapter_not_built when used', async () => {

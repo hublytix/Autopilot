@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { TransientError } from '@/server/domain/errors';
 import { createJobRegistry } from '@/server/jobs/registry';
 import { createJobTestRig, type JobTestRig } from '@/server/jobs/testing';
 import { seedOwner } from '@/server/services/accounts/testing';
 import { issuePendingInstallCookie } from '@/server/services/install/cookies';
 import { useTestDb as setUpTestDb } from '../../../../test/db/harness';
+import { retryAuthUserDeletions } from './auth-user-deletion';
 import { onboardingEmailContext, PENDING_OWNER_TTL_MS, submitOnboardingEmail } from './onboarding-email';
 import { accountAuthState, deliveredMagicLinks, seedPendingInstall, type PendingInstallSeed } from './testing';
 
@@ -183,6 +185,42 @@ describe('the onboarding email step', () => {
     await getDb().query(`insert into users (auth_user_id, account_id, email) values ($1, $2, 'bound-elsewhere@example.com')`, [bound?.userId, owned.accountId]);
     await submit(third, 'next@example.com', '198.51.100.5');
     expect(await rig.fakes.auth.findUserByEmail('bound@example.com')).toEqual(bound);
+  });
+
+  it('queues a replaced auth user whose delete failed, and the daily retry deletes it (never left in Supabase, D-82)', async () => {
+    const install = await seedPendingInstall(rig.deps);
+    await submit(install, 'first@example.com');
+    const first = await rig.fakes.auth.findUserByEmail('first@example.com');
+    const failingDeps = {
+      ...rig.deps,
+      auth: new Proxy(rig.deps.auth, {
+        get(object, property, receiver) {
+          if (property === 'deleteUser') return async () => Promise.reject(new TransientError('auth_unavailable'));
+          const value: unknown = Reflect.get(object, property, receiver);
+          return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(object) : value;
+        },
+      }),
+    };
+    await expect(submitOnboardingEmail(failingDeps, { pendingCookie: install.cookie.value, email: OWNER, ip: '203.0.113.11' })).resolves.toEqual({ type: 'sent' });
+    expect(await rig.fakes.auth.findUserByEmail('first@example.com')).toEqual(first);
+    expect(await getDb().query(`select auth_user_id from auth_user_deletions`)).toEqual([{ auth_user_id: first?.userId }]);
+
+    expect(await retryAuthUserDeletions(rig.deps)).toMatchObject({ checked: 1, deleted: 1 });
+    expect(await rig.fakes.auth.findUserByEmail('first@example.com')).toBeNull();
+    expect(await getDb().query(`select auth_user_id from auth_user_deletions`)).toEqual([]);
+  });
+
+  it('after a branch-(b) reinstall cleared the stored address, still checks it (read from the AuthProvider) before deleting a replaced user', async () => {
+    const other = await seedPendingInstall(rig.deps);
+    const install = await seedPendingInstall(rig.deps);
+    await submit(install, 'shared@example.com', '198.51.100.6');
+    const shared = await rig.fakes.auth.findUserByEmail('shared@example.com');
+    // The reinstall cleared the pending email (the user's id is kept); another install now waits on that address.
+    await getDb().query(`update accounts set pending_owner_email = null, pending_owner_expires_at = null where id = $1`, [install.accountId]);
+    await submit(other, 'shared@example.com', '198.51.100.7');
+    await submit(install, OWNER, '198.51.100.8');
+    expect(await rig.fakes.auth.findUserByEmail('shared@example.com')).toEqual(shared);
+    expect(await getDb().query(`select auth_user_id from auth_user_deletions`)).toEqual([{ auth_user_id: shared?.userId }]);
   });
 
   it('allows at most 3 distinct emails per pending install; an accepted one can be sent again', async () => {

@@ -1,0 +1,40 @@
+{
+  "source": "docs/research/08-razorpay.md, RZP-WH-TEST-VECTORS and 08.2 (razorpay@2.9.8 helper, node:crypto and openssl agree)",
+  "webhook": [
+    {
+      "name": "A_sdk_documented_example",
+      "file": "A.body",
+      "secret": "123456",
+      "bodyLength": 983,
+      "bodySha256": "986651c07d2a3e46d95cff0f9947a12f5c77b00d47c83c30be9f5c0283463b1b",
+      "signature": "55d3c166391ec51285b388f1bb9f0ba9b13dde1bece4484aaac6edd34a01459a"
+    },
+    {
+      "name": "B_subscription_activated",
+      "file": "B.body",
+      "secret": "autopilot_webhook_secret_test",
+      "bodyLength": 781,
+      "bodySha256": "b17497e95dc61a3a75cddd63778f4cf2dd248f4a109d0b3349f11e9193defc56",
+      "signature": "295edb02518396f42f7568c942c21def25aa3a7bb2a92cff001c25d6344d7bbc"
+    },
+    {
+      "name": "C_utf8_body_and_secret",
+      "file": "C.body",
+      "secret": "s3cr3t-ütf8",
+      "bodyLength": 178,
+      "bodySha256": "3c9887b4c0287595cd888dedfe10cb21b8c87b096086730f40f3a48b00cc1e94",
+      "signature": "4542d47ca6c160fb1323f7650cc30a070241d9d3afe9b2ea1601568bf3b25ac3"
+    }
+  ],
+  "checkoutPayment": {
+    "name": "D_checkout_subscription_payment_signature",
+    "message": "pay_TESTPAY000001|sub_TESTSUB000001",
+    "keySecret": "testkeysecret0000000000",
+    "signature": "e877a2b95c3e1d1d5b9001ba8af2be9dd2129026e99137d5626667610a96d353"
+  },
+  "emptySecretForgery": {
+    "body": "{\"event\":\"subscription.activated\"}",
+    "secret": "",
+    "signature": "8d5d9f09e43d30e59e4bb9610080ca577b42035adb6784d6dbeee5ff186489a2"
+  }
+}

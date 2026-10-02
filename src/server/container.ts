@@ -186,8 +186,8 @@ function liveAdapterNotBuilt<T extends object>(): T {
 }
 
 /**
- * The live adapters built so far (PLAN §15): M2 brings HubSpot, the LLM, the mailer and the
- * scheduler; M3 the AuthProvider (Supabase) and the WebFetcher (undici behind the SSRF guard).
+ * The live adapters (PLAN §15): M2 brings HubSpot, the LLM, the mailer and the scheduler; M3 the
+ * AuthProvider (Supabase) and the WebFetcher (undici behind the SSRF guard); M7 Razorpay billing.
  */
 export interface LiveAdapters {
   hubspot: HubSpotClient;
@@ -196,6 +196,7 @@ export interface LiveAdapters {
   scheduler: Scheduler;
   auth: AuthProvider;
   webFetcher: WebFetcher;
+  billing: Billing;
 }
 
 /**
@@ -211,6 +212,7 @@ export async function buildLiveAdapters(env: Env, clock: Clock): Promise<LiveAda
     { QstashScheduler },
     { createSupabaseAuthProvider },
     { HttpWebFetcher },
+    { RazorpayBilling },
   ] = await Promise.all([
     import('@/server/adapters/live/hubspot'),
     import('@/server/adapters/live/anthropic-llm'),
@@ -219,6 +221,7 @@ export async function buildLiveAdapters(env: Env, clock: Clock): Promise<LiveAda
     import('@/server/adapters/live/qstash-scheduler'),
     import('@/server/adapters/live/supabase-auth'),
     import('@/server/adapters/live/http-web-fetcher'),
+    import('@/server/adapters/live/razorpay-billing'),
   ]);
   return {
     hubspot: new HubSpotHttpClient({
@@ -242,6 +245,7 @@ export async function buildLiveAdapters(env: Env, clock: Clock): Promise<LiveAda
       clock,
     }),
     webFetcher: new HttpWebFetcher({ appUrl: env.APP_URL, clock }),
+    billing: new RazorpayBilling({ keyId: env.RAZORPAY_KEY_ID, keySecret: env.RAZORPAY_KEY_SECRET }),
   };
 }
 
@@ -253,7 +257,7 @@ export interface LiveDepsOptions {
   adapters?: Partial<LiveAdapters> | undefined;
 }
 
-/** Live Deps: SystemClock, Postgres.js and the live adapters given; billing comes in M7. */
+/** Live Deps: SystemClock, Postgres.js and the live adapters given. */
 export function createLiveDeps(options: LiveDepsOptions): Deps {
   const adapters = options.adapters ?? {};
   return {
@@ -264,7 +268,7 @@ export function createLiveDeps(options: LiveDepsOptions): Deps {
     llm: adapters.llm ?? liveAdapterNotBuilt<LLM>(),
     mailer: adapters.mailer ?? liveAdapterNotBuilt<Mailer>(),
     scheduler: adapters.scheduler ?? liveAdapterNotBuilt<Scheduler>(),
-    billing: liveAdapterNotBuilt<Billing>(),
+    billing: adapters.billing ?? liveAdapterNotBuilt<Billing>(),
     webFetcher: adapters.webFetcher ?? liveAdapterNotBuilt<WebFetcher>(),
     auth: adapters.auth ?? liveAdapterNotBuilt<AuthProvider>(),
   };

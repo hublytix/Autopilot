@@ -28,6 +28,8 @@ export const LeaseNames = {
   pollCron: 'poll',
   /** pollPortal for one account: the cron and the webhook-triggered portal_poll jobs never overlap. */
   accountPoll: (accountId: string): string => `poll:${accountId}`,
+  /** The daily maintenance cron (`/api/cron/daily`): one run at a time (TTL 6 min). */
+  dailyCron: 'daily',
 } as const;
 
 const leaseRowSchema = z.object({ name: z.string(), holder: z.string(), expires_at: z.date() });

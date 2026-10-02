@@ -3,7 +3,7 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { SignOutButton } from '@/components/ui';
 
-// The dashboard shell (PLAN §7.5): the product name, the two dashboard pages and Sign out. Every page
+// The dashboard shell (PLAN §7.5): the product name, the dashboard pages and Sign out. Every page
 // below checks the owner itself (requireOwnerPage); the proxy refreshes the session on /dashboard and
 // sends Cache-Control: private, no-store and X-Robots-Tag: noindex (D-49).
 
@@ -17,6 +17,8 @@ export const metadata: Metadata = {
 const NAV = [
   { href: '/dashboard', label: 'Leads' },
   { href: '/dashboard/brief', label: 'Your brief' },
+  { href: '/dashboard/settings', label: 'Settings' },
+  { href: '/dashboard/billing', label: 'Billing' },
 ] as const;
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {

@@ -5,6 +5,7 @@ import { log } from '@/server/obs/log';
 import type { Deps } from '@/server/ports';
 import { sha256Hex } from '@/server/security/keys';
 import { parseWebhookBody, processHubSpotWebhook } from '@/server/services/intake';
+import { readBoundedText } from './bounded-body';
 
 // POST /api/hubspot/webhooks (PLAN §7.3, §10.1, D-05, D-06; HS-WH-DELIVERY):
 // 1. read the raw body (bounded) and verify the v3 signature on it, with HUBSPOT_WEBHOOK_TARGET_URL
@@ -34,15 +35,10 @@ function parseJson(raw: string): unknown {
   }
 }
 
-function tooLarge(req: Request): boolean {
-  const declared = req.headers.get('content-length');
-  return declared !== null && /^\d{1,15}$/.test(declared) && Number(declared) > HUBSPOT_WEBHOOK_MAX_BODY_BYTES;
-}
-
 export async function handleHubSpotWebhook(req: Request, deps: Deps): Promise<Response> {
-  if (tooLarge(req)) return json(413, { ok: false, code: 'webhook_body_too_large' });
-  const raw = await req.text();
-  if (Buffer.byteLength(raw, 'utf8') > HUBSPOT_WEBHOOK_MAX_BODY_BYTES) return json(413, { ok: false, code: 'webhook_body_too_large' });
+  // Counted while it streams (a chunked body has no Content-Length): never buffered past the limit.
+  const raw = await readBoundedText(req, HUBSPOT_WEBHOOK_MAX_BODY_BYTES);
+  if (raw === null) return json(413, { ok: false, code: 'webhook_body_too_large' });
 
   const verified = verifyHubSpotSignatureV3({
     method: req.method,

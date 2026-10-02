@@ -8,7 +8,10 @@
 //   (brief, forms, preferences, inbox, baseline) → the inbox test email's edit and dismiss links (M4:
 //   GET + POST each, no JavaScript) → Finish → /dashboard (M6: the status card, Pause all and Resume
 //   as Server Actions without JavaScript) → /dashboard/brief → the inbox check's test lead's page
-//   (viewable, marked as the test lead, never listed) and 404s for an unknown or malformed lead id.
+//   (viewable, marked as the test lead, never listed) and 404s for an unknown or malformed lead id →
+//   M7: /dashboard/settings (preferences saved without JavaScript, the forms page) → /dashboard/billing
+//   → Subscribe → the fake Razorpay checkout → "Authorise payment" → authenticated → Cancel →
+//   Disconnect → /admin for an ADMIN_EMAILS address (a 404 for the owner).
 //
 // The app's PGlite is single-process, so the magic link is read with the server stopped and the
 // server is started again on the same FAKE_DB_DIR: the link still works after the restart only
@@ -437,6 +440,9 @@ async function run(dataDir: string): Promise<void> {
     );
     const baselineDone = await waitFor(owner, 'the baseline job', (s) => (s.baseline as { state?: string } | undefined)?.state === 'done');
     check('baseline job done (dev ticker)', (baselineDone?.baseline as { state?: string } | undefined)?.state === 'done', JSON.stringify(baselineDone?.baseline ?? null));
+
+    // M7: settings, billing through the fake Razorpay checkout, Disconnect, /admin.
+    server = await runM7(owner, anonymous, baseUrl, dataDir, port, env, server);
   } catch (error) {
     check('run', false, error instanceof Error ? `${error.name}: ${error.message}` : 'failed');
     console.error(server.output.join('').slice(-4000));
@@ -450,6 +456,156 @@ async function run(dataDir: string): Promise<void> {
     .filter((line) => line.includes('"level":"error"') || line.includes('"level":"warn"'));
   for (const line of flagged) console.log(`e2e: server ${line}`);
   check('server logged no error', !flagged.some((line) => line.includes('"level":"error"')), `${flagged.length} warn/error lines`);
+}
+
+/**
+ * M7 (PLAN §7.3, §7.5, §9.1 step 5, §9.9): /dashboard/settings (save the preferences without
+ * JavaScript, the forms page), /dashboard/billing → Subscribe (Server Action) → our own continue page
+ * → the fake Razorpay checkout → "Authorise payment" (its webhook delivered to the real handler) →
+ * authenticated; the checkout route itself (same origin: guarded; cross-origin: 403); Cancel; the
+ * Disconnect dialog and Disconnect; /admin for an ADMIN_EMAILS address (a 404 for the owner).
+ * Returns the server that is running at the end (the admin's magic link needs a restart).
+ */
+async function runM7(owner: Browser, anonymous: Browser, baseUrl: string, dataDir: string, port: number, env: NodeJS.ProcessEnv, running: NextServer): Promise<NextServer> {
+  let server = running;
+  const settings = await owner.page('/dashboard/settings');
+  const settingsNonce = scriptsNonced(settings.response, settings.$);
+  check(
+    '/dashboard/settings: status, forms, billing, the Disconnect link',
+    settings.response.status === 200 &&
+      isPrivate(settings.response) &&
+      settingsNonce.ok &&
+      settings.$('[data-testid="settings-status"]').attr('data-state') === 'active' &&
+      settings.$('[data-testid="selected-forms"] li').length === 2 &&
+      settings.$('[data-testid="billing-summary"]').length === 1 &&
+      settings.$('a[href="/dashboard/settings/disconnect"]').length === 1,
+    `${settings.response.status}, private ${isPrivate(settings.response)}, ${settingsNonce.detail}`,
+  );
+  const nav = settings.$('nav[aria-label="Dashboard"] a').toArray().map((a) => settings.$(a).attr('href'));
+  check('dashboard navigation links Settings and Billing', nav.includes('/dashboard/settings') && nav.includes('/dashboard/billing'), nav.join(' '));
+  const preferences = await owner.submit(settings.$, '/dashboard/settings', 'input[name="notify_email_0"]');
+  await preferences.body?.cancel();
+  check(
+    'settings: preferences saved (Server Action, no JavaScript)',
+    preferences.status === 303 && (locationPath(preferences, baseUrl) ?? '').startsWith('/dashboard/settings?result=preferences_saved'),
+    `${preferences.status} → ${locationPath(preferences, baseUrl) ?? 'page'}`,
+  );
+  const formsSettings = await owner.page('/dashboard/settings/forms');
+  check('/dashboard/settings/forms lists the portal forms', formsSettings.response.status === 200 && formsSettings.$('input[name="form_id"]').length === 3, `${formsSettings.response.status}`);
+
+  const status = (page: { $: CheerioAPI }): string => page.$('[data-testid="subscription-status"]').attr('data-status') ?? 'none';
+  const billing = await owner.page('/dashboard/billing');
+  const billingNonce = scriptsNonced(billing.response, billing.$);
+  check(
+    '/dashboard/billing: trial, no subscription, Subscribe',
+    billing.response.status === 200 && isPrivate(billing.response) && billingNonce.ok && status(billing) === 'none' && billing.html.includes('Free trial:') && billing.$('button:contains("Subscribe")').length === 1,
+    `${billing.response.status}, status ${status(billing)}, ${billingNonce.detail}`,
+  );
+  const subscribed = await owner.submit(billing.$, '/dashboard/billing', 'button:contains("Subscribe")');
+  await subscribed.body?.cancel();
+  check('Subscribe (Server Action) → our continue page', subscribed.status === 303 && locationPath(subscribed, baseUrl) === '/dashboard/billing/checkout', `${subscribed.status} → ${locationPath(subscribed, baseUrl) ?? 'none'}`);
+  const continuePage = await owner.page('/dashboard/billing/checkout');
+  const href = continuePage.$('a:contains("Continue to Razorpay")').attr('href') ?? '';
+  const checkoutPath = href.startsWith(`${baseUrl}/dev/fake-checkout/sub_`) ? new URL(href).pathname : null;
+  check('continue page links the stored checkout (fake Razorpay)', continuePage.response.status === 200 && isPrivate(continuePage.response) && checkoutPath !== null, `${continuePage.response.status}, link ${checkoutPath === null ? 'none' : '/dev/fake-checkout/{id}'}`);
+  if (checkoutPath !== null) {
+    const fakeCheckout = await owner.page(checkoutPath);
+    check('fake checkout page offers "Authorise payment"', fakeCheckout.response.status === 200 && fakeCheckout.$('button:contains("Authorise payment")').length === 1, `${fakeCheckout.response.status}`);
+    const authorised = await owner.submit(fakeCheckout.$, checkoutPath, 'button:contains("Authorise payment")', { action: 'authorise' });
+    await authorised.body?.cancel();
+    check(
+      'Authorise payment → the signed webhook delivered to the real handler',
+      authorised.status === 303 && locationPath(authorised, baseUrl) === `${checkoutPath}?done=authorise&delivered=1&failed=0`,
+      `${authorised.status} → ${(locationPath(authorised, baseUrl) ?? 'none').replace(/sub_[A-Za-z0-9]+/, '{id}')}`,
+    );
+  }
+  const subscribedPage = await owner.page('/dashboard/billing');
+  check(
+    '/dashboard/billing: authenticated, Cancel subscription offered',
+    status(subscribedPage) === 'authenticated' && subscribedPage.$('button:contains("Cancel subscription")').length === 1,
+    `status ${status(subscribedPage)}`,
+  );
+  const guarded = await owner.request('/api/billing/checkout', { method: 'POST', headers: { origin: baseUrl } });
+  await guarded.body?.cancel();
+  check(
+    'POST /api/billing/checkout (same origin) → the guard: already subscribed',
+    guarded.status === 303 && locationPath(guarded, baseUrl) === '/dashboard/billing?result=checkout.already_subscribed',
+    `${guarded.status} → ${locationPath(guarded, baseUrl) ?? 'none'}`,
+  );
+  const crossOrigin = await owner.request('/api/billing/checkout', { method: 'POST', headers: { origin: 'https://attacker.example' } });
+  await crossOrigin.body?.cancel();
+  check('POST /api/billing/checkout from another origin → 403', crossOrigin.status === 403, `${crossOrigin.status}`);
+  const anonymousCheckout = await anonymous.request('/api/billing/checkout', { method: 'POST', headers: { origin: baseUrl } });
+  await anonymousCheckout.body?.cancel();
+  check('POST /api/billing/checkout without a session → /login', anonymousCheckout.status === 303 && locationPath(anonymousCheckout, baseUrl) === '/login', `${anonymousCheckout.status}`);
+  const cancelled = await owner.submit(subscribedPage.$, '/dashboard/billing', 'button:contains("Cancel subscription")');
+  await cancelled.body?.cancel();
+  const cancelledPage = await owner.page(locationPath(cancelled, baseUrl) ?? '/dashboard/billing');
+  check(
+    'Cancel subscription (Server Action) → cancelled now, nothing charged',
+    cancelled.status === 303 && locationPath(cancelled, baseUrl) === '/dashboard/billing?result=cancel.cancelled' && status(cancelledPage) === 'cancelled',
+    `${cancelled.status} → ${locationPath(cancelled, baseUrl) ?? 'none'}, status ${status(cancelledPage)}`,
+  );
+
+  // The owner is not an admin: /admin is a 404 for them.
+  const ownerAdmin = await owner.request('/admin');
+  await ownerAdmin.body?.cancel();
+  check('/admin for the signed-in owner → 404', ownerAdmin.status === 404, `${ownerAdmin.status}`);
+
+  const dialog = await owner.page('/dashboard/settings/disconnect');
+  check(
+    '/dashboard/settings/disconnect: what happens, no billing choice left',
+    dialog.response.status === 200 && isPrivate(dialog.response) && dialog.$('[data-testid="disconnect-consequences"] li').length > 0 && dialog.$('[data-testid="disconnect-billing"]').attr('data-option') === 'none',
+    `${dialog.response.status}, option ${dialog.$('[data-testid="disconnect-billing"]').attr('data-option') ?? 'none'}`,
+  );
+  const disconnected = await owner.submit(dialog.$, '/dashboard/settings/disconnect', 'button:contains("Disconnect HubSpot")');
+  await disconnected.body?.cancel();
+  check(
+    'Disconnect HubSpot (Server Action) → settings with the outcome',
+    disconnected.status === 303 && locationPath(disconnected, baseUrl) === '/dashboard/settings?result=disconnected&billing=not_requested',
+    `${disconnected.status} → ${locationPath(disconnected, baseUrl) ?? 'none'}`,
+  );
+  const afterDisconnect = await owner.page('/dashboard');
+  check(
+    '/dashboard after Disconnect: disconnected, Reconnect within 30 days',
+    afterDisconnect.response.status === 200 &&
+      afterDisconnect.$('[data-testid="status-card"]').attr('data-state') === 'disconnected' &&
+      afterDisconnect.html.includes('Reconnect within 30 days') &&
+      afterDisconnect.$('a[href="/api/hubspot/install"]').length > 0,
+    `${afterDisconnect.response.status}, state ${afterDisconnect.$('[data-testid="status-card"]').attr('data-state') ?? 'none'}`,
+  );
+
+  // /admin: an ADMIN_EMAILS address signs in with a magic link (read with the server stopped).
+  const admin = new Browser(baseUrl, '198.51.100.40');
+  const adminLogin = await admin.page('/login');
+  const adminSent = await admin.submit(adminLogin.$, '/login', 'input[name="email"]', { email: 'fake-only-admin@example.com' });
+  await adminSent.body?.cancel();
+  check('admin /login → link sent', adminSent.status === 303 && locationPath(adminSent, baseUrl) === '/login?sent=1', `${adminSent.status} → ${locationPath(adminSent, baseUrl) ?? 'none'}`);
+  await sleep(500);
+  await stopServer(server);
+  const adminLink = await readMagicLink(dataDir);
+  server = startServer(port, env);
+  await waitUntilReady(baseUrl, server);
+  await admin.page('/auth/confirm');
+  const adminConfirmed = await admin.request('/auth/confirm', {
+    method: 'POST',
+    headers: { origin: baseUrl, 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ th: adminLink?.tokenHash ?? '', type: adminLink?.type ?? '' }).toString(),
+  });
+  check('admin magic link → /admin', adminConfirmed.status === 303 && locationPath(adminConfirmed, baseUrl) === '/admin', `${adminConfirmed.status} → ${locationPath(adminConfirmed, baseUrl) ?? 'none'}`);
+  const adminPage = await admin.page('/admin');
+  const adminNonce = scriptsNonced(adminPage.response, adminPage.$);
+  check(
+    '/admin: private, the overview, no owner address or content',
+    adminPage.response.status === 200 &&
+      isPrivate(adminPage.response) &&
+      adminNonce.ok &&
+      adminPage.$('[data-testid="last-webhooks"]').length === 1 &&
+      !adminPage.html.includes('owner.personal@example.net') &&
+      !/@brightside|fake-only-owner/i.test(adminPage.html),
+    `${adminPage.response.status}, private ${isPrivate(adminPage.response)}, ${adminNonce.detail}`,
+  );
+  return server;
 }
 
 async function main(): Promise<number> {

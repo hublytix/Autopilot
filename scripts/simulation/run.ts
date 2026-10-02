@@ -11,6 +11,7 @@ import type { FakeDelivery, FakeFailureCallback } from '@/server/adapters/fake/s
 import { migrate } from '@/server/db/migrate';
 import { createPgliteDb, type PgliteDb } from '@/server/db/pglite';
 import { parseEnv, type Env } from '@/server/env';
+import { CRON_DAILY_PATH, handleCronDaily } from '@/server/http/cron-daily';
 import { CRON_POLL_PATH, handleCronPoll } from '@/server/http/cron-poll';
 import { CRON_WEEKLY_REPORT_PATH, handleCronWeeklyReport } from '@/server/http/cron-weekly-report';
 import { createSchedulerBridge } from '@/server/jobs/bridge';
@@ -167,6 +168,31 @@ const weeklyReportSummarySchema = z.object({
   code: z.string().optional(),
 });
 
+const countOf = z.number().int().nonnegative();
+// Counts only. The webhook_events prune goes by `recorded_at`, bound from the Clock like every
+// logical column (D-82), so its count is as deterministic as the others (the 2030 run must produce
+// the same summary).
+const dailySummarySchema = z.object({
+  ok: z.boolean(),
+  status: z.string().optional(),
+  code: z.string().optional(),
+  errors: z.number().optional(),
+  retention: z
+    .object({
+      leadMessagesDeleted: countOf,
+      draftsPurged: countOf,
+      inboxChecksClosed: countOf,
+      testAddressesCleared: countOf,
+      loginIntentsDeleted: countOf,
+      actionTokensDeleted: countOf,
+      webhookEventsDeleted: countOf,
+    })
+    .nullable()
+    .optional(),
+  tombstones: z.object({ checked: countOf, resolved: countOf, cancelled: countOf, open: countOf, failed: countOf }).nullable().optional(),
+  jobs: z.object({ accounts: countOf, created: countOf, existing: countOf, published: countOf }).nullable().optional(),
+});
+
 /** A cron route as Vercel Cron calls it: `GET` with `Authorization: Bearer CRON_SECRET`. */
 function cronRequest(env: Env, routePath: string): Request {
   return new Request(`${env.APP_URL}${routePath}`, { headers: { authorization: `Bearer ${env.CRON_SECRET}` } });
@@ -209,15 +235,16 @@ export async function runSimulation(options: RunOptions): Promise<SimulationSumm
       if (leadId !== undefined && leadId !== null) leadLinks.push({ index: timeline.length - 1, leadId });
     };
 
-    // Every lead the run creates is noted once, with the trigger that found it (PLAN §13).
-    const seenLeads = new Set<string>();
+    // Every lead the run creates is noted once, with the trigger that found it (PLAN §13). Its
+    // declared key is kept, so a lead a later purge deleted (the disconnect variant) still has its ref.
+    const seenLeads = new Map<string, string | null>();
     const noteNewLeads = async (): Promise<void> => {
-      const rows = await db.query<{ id: string; intake_trigger: string; is_test: boolean }>(
-        `select id, intake_trigger, is_test from public.leads order by received_at, submitted_at, hubspot_contact_id nulls last`,
+      const rows = await db.query<{ id: string; intake_trigger: string; is_test: boolean; hubspot_contact_id: string | null; submitted_at: Date }>(
+        `select id, intake_trigger, is_test, hubspot_contact_id, submitted_at from public.leads order by received_at, submitted_at, hubspot_contact_id nulls last`,
       );
       for (const row of rows) {
         if (seenLeads.has(row.id)) continue;
-        seenLeads.add(row.id);
+        seenLeads.set(row.id, row.hubspot_contact_id === null ? null : declaredLeadKey(row.hubspot_contact_id, row.submitted_at));
         // The inbox check's test lead is in no list (PLAN §13): it is noted without a ref.
         if (row.is_test) record('intake', 'test_lead.created', { trigger: row.intake_trigger });
         else record('intake', 'lead.created', { lead: null, trigger: row.intake_trigger, isTest: false }, row.id);
@@ -240,13 +267,28 @@ export async function runSimulation(options: RunOptions): Promise<SimulationSumm
     }, registries.jobs);
     const jobRow = (jobId: string) =>
       db.maybeOne<{ status: string; lead_id: string | null }>('select status, lead_id from public.scheduled_jobs where id = $1', [jobId]);
+    // The account_daily job (M7) reads HubSpot for the leads whose follow-ups are over; its timeline
+    // entry says how many leads it read in full and how many emails went out meanwhile (none expected).
+    const signalsChecked = async (): Promise<Map<string, number>> =>
+      new Map(
+        (await db.query<{ id: string; at: Date | null }>('select id, signals_checked_at as at from public.leads')).map((row) => [row.id, row.at?.getTime() ?? 0]),
+      );
     const dispatch = async (delivery: FakeDelivery): Promise<{ status: number; headers: Headers }> => {
+      const daily = delivery.kind === 'account_daily';
+      const emailsBefore = fakes.mailer.sent.length;
+      const checkedBefore = daily ? await signalsChecked() : null;
       const result = await bridge.dispatch(delivery);
       const row = await jobRow(delivery.jobId);
+      let extra: Detail = {};
+      if (checkedBefore !== null) {
+        const checkedAfter = await signalsChecked();
+        const leadsRead = [...checkedAfter].filter(([id, at]) => at !== (checkedBefore.get(id) ?? 0)).length;
+        extra = { leadsRead, emailsSent: fakes.mailer.sent.length - emailsBefore };
+      }
       record(
         'job',
         `job.${delivery.kind}`,
-        { lead: null, retried: delivery.retried, httpStatus: result.status, jobStatus: row?.status ?? null },
+        { lead: null, retried: delivery.retried, httpStatus: result.status, jobStatus: row?.status ?? null, ...extra },
         row?.lead_id ?? null,
       );
       await noteNewLeads();
@@ -272,8 +314,7 @@ export async function runSimulation(options: RunOptions): Promise<SimulationSumm
     box.deps = deps;
     timeZone = fakes.hubspot.portal.timeZone;
 
-    // PLAN §8.1 periodic triggers. The daily run (M7) has no handler yet: its ticks are recorded so
-    // the timeline already shows the full schedule.
+    // PLAN §8.1 periodic triggers, each through its real route handler.
     const crons: CronSeries[] = [
       {
         name: 'cron.poll',
@@ -320,8 +361,24 @@ export async function runSimulation(options: RunOptions): Promise<SimulationSumm
       {
         name: 'cron.daily',
         next: DAILY_0317_UTC,
+        // The daily maintenance (PLAN §7.3, §9.10, M7): retention and prunes, the billing-tombstone
+        // reconcile, and one account_daily job per account (delivered right after, through the scheduler).
         run: async () => {
-          record('tick', 'cron.daily', { handler: 'none_until_m7' });
+          const response = await handleCronDaily(cronRequest(env, CRON_DAILY_PATH), deps);
+          const body = dailySummarySchema.parse(await response.json());
+          record('tick', 'cron.daily', {
+            httpStatus: response.status,
+            status: body.status ?? body.code ?? null,
+            errors: body.errors ?? null,
+            leadMessagesDeleted: body.retention?.leadMessagesDeleted ?? null,
+            draftsPurged: body.retention?.draftsPurged ?? null,
+            loginIntentsDeleted: body.retention?.loginIntentsDeleted ?? null,
+            actionTokensDeleted: body.retention?.actionTokensDeleted ?? null,
+            tombstonesChecked: body.tombstones?.checked ?? null,
+            tombstonesResolved: body.tombstones?.resolved ?? null,
+            accounts: body.jobs?.accounts ?? null,
+            jobsCreated: body.jobs?.created ?? null,
+          });
         },
       },
     ];
@@ -349,6 +406,9 @@ export async function runSimulation(options: RunOptions): Promise<SimulationSumm
       record(kind, name, detail?: Detail) {
         record(kind, name, detail);
       },
+      entries() {
+        return timeline;
+      },
       check(id, ok, detail) {
         checks.push({ id, stage: currentStage, ok, ...(detail !== undefined ? { detail } : {}) });
       },
@@ -369,7 +429,14 @@ export async function runSimulation(options: RunOptions): Promise<SimulationSumm
       });
     }
 
-    const { leads, refById } = await readLeads(db, declared);
+    const read = await readLeads(db, declared);
+    const { leads } = read;
+    // Leads gone by the end (purged with their account) keep the ref they were declared with.
+    const refById = new Map(read.refById);
+    for (const [id, key] of seenLeads) {
+      const ref = key === null ? undefined : declared.get(key);
+      if (!refById.has(id) && ref !== undefined) refById.set(id, ref);
+    }
     for (const { index, leadId } of leadLinks) {
       const entry = timeline[index];
       if (entry?.detail !== undefined) entry.detail = { ...entry.detail, lead: refById.get(leadId) ?? null };

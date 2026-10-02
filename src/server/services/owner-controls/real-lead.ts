@@ -18,8 +18,9 @@ import { leadProcessDedupeKey } from '@/server/services/leads/process';
 //
 // Only a `filtered` lead (PLAN §6.2 "FILTERED (owner override → process_rev+1)"; §7.5 shows the button
 // for filtered leads). Refused, changing nothing: not the owner's lead, not filtered, a test lead,
-// dismissed, privacy-deleted, its content already purged (nothing to draft from), or the account not
-// active (lead_process would only skip it, turning "Filtered" into "Not processed").
+// dismissed, privacy-deleted, its content already purged or past its `purge_at` (nothing to draft
+// from; the purge may not have run yet, D-77), or the account not active (lead_process would
+// only skip it, turning "Filtered" into "Not processed").
 
 export type MarkRealLeadRefusal =
   | 'not_found'
@@ -59,11 +60,11 @@ type InTx = { readonly type: 'queued'; readonly processRev: number; readonly job
 async function overrideInTx(tx: Db, accountId: string, leadId: string, now: Date): Promise<InTx> {
   const row = await tx.maybeOne<OverrideRow>(
     `select l.processing_state, l.process_rev, l.is_test, l.dismissed_at, l.stop_reason,
-            exists (select 1 from lead_messages m where m.lead_id = l.id) as has_content,
+            exists (select 1 from lead_messages m where m.lead_id = l.id and m.purge_at > $3) as has_content,
             a.processing_state as account_state
        from leads l join accounts a on a.id = l.account_id
       where l.id = $1 and l.account_id = $2`,
-    [leadId, accountId],
+    [leadId, accountId, now],
   );
   if (row === null) return { type: 'refused', reason: 'not_found' };
   const refusal = refusalOf(row);

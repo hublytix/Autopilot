@@ -73,9 +73,9 @@ describe('isOneOf guards', () => {
 });
 
 describe('values fixed by PLAN and DECISIONS', () => {
-  it('subscription statuses are Razorpay’s nine plus the local stale (D-18)', () => {
+  it('subscription statuses are Razorpay’s nine plus the local stale and unknown (D-18, D-82)', () => {
     expect(RAZORPAY_SUBSCRIPTION_STATUSES).toHaveLength(9);
-    expect(SUBSCRIPTION_STATUSES).toEqual([...RAZORPAY_SUBSCRIPTION_STATUSES, 'stale']);
+    expect(SUBSCRIPTION_STATUSES).toEqual([...RAZORPAY_SUBSCRIPTION_STATUSES, 'stale', 'unknown']);
     expect(isSubscriptionStatus('paused')).toBe(true);
     expect(isSubscriptionStatus('resumed')).toBe(false);
     expect(isSubscriptionStatus('trialing')).toBe(false);

@@ -1,0 +1,1 @@
+{"entity":"event","event":"subscription.charged","payload":{"subscription":{"entity":{"id":"sub_TESTSUB000001","notes":{"company":"Café Zürich ₹"}}}},"created_at":1790812900}

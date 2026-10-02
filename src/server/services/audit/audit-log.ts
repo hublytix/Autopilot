@@ -9,8 +9,9 @@ import type { Db } from '@/server/db';
 // do not look like an id, a code or an ISO instant, are refused before anything is written.
 
 // leadId/repliedAt/followupStream: "Resume follow-ups" records the cleared reply time (D-42);
-// pausedAt: Pause/Resume record which pause they started or ended (PLAN §9.6).
-export const AUDIT_META_KEYS = ['formId', 'submittedAt', 'leadId', 'repliedAt', 'followupStream', 'pausedAt'] as const;
+// pausedAt: Pause/Resume record which pause they started or ended (PLAN §9.6);
+// adminUserId: which admin viewed /admin (the auth user id, never the address; PLAN §7.5, D-82).
+export const AUDIT_META_KEYS = ['formId', 'submittedAt', 'leadId', 'repliedAt', 'followupStream', 'pausedAt', 'adminUserId'] as const;
 export type AuditMetaKey = (typeof AUDIT_META_KEYS)[number];
 export type AuditMeta = Partial<Record<AuditMetaKey, string | number | boolean | null>>;
 
@@ -48,6 +49,17 @@ export interface AuditEntry {
   action: string;
   level: AuditLevel;
   meta: AuditMeta;
+}
+
+/** Inserts the entry (no dedupe: one row per call, e.g. each /admin view). */
+export async function insertAudit(db: Db, entry: AuditEntry): Promise<void> {
+  await db.query(`insert into audit_log (account_id, actor, action, level, meta) values ($1::uuid, $2::text, $3::text, $4::text, $5::jsonb)`, [
+    entry.accountId,
+    entry.actor,
+    entry.action,
+    entry.level,
+    assertAuditMeta(entry.meta),
+  ]);
 }
 
 /**

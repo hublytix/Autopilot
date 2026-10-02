@@ -6,6 +6,7 @@ import type { Deps } from '@/server/ports';
 import { isAuthorizedCronRequest } from '@/server/security/cron-auth';
 import type { Sleep } from '@/server/services/hubspot';
 import { runPollCron, type PollCronOptions, type RetentionGuardSummary } from '@/server/services/intake';
+import { runRetentionGuardSteps } from '@/server/services/retention';
 
 // GET|POST /api/cron/poll (PLAN §7.3, §8.1 `*/5 * * * *`, D-16): a Vercel Cron GET with
 // `Authorization: Bearer ${CRON_SECRET}`, or a QStash schedule POST signed for this URL; 401
@@ -15,11 +16,12 @@ import { runPollCron, type PollCronOptions, type RetentionGuardSummary } from '@
 export const CRON_POLL_PATH = '/api/cron/poll';
 
 /**
- * M7 HOOK (D-49, PLAN §9.10): the cheap retention guard run every 5 minutes, so content never
- * outlives 30 d + 1 h (the DB-local purge steps 1-4). Until M7 builds it, it does nothing.
+ * The cheap retention guard run every 5 minutes (D-49, PLAN §9.10 steps 1-4): one existence check,
+ * and the content purge only when something is due, so content never outlives 30 d + 1 h.
+ * `{ran: false}` when nothing was due; otherwise the counts.
  */
-export async function runRetentionGuard(_deps: Deps): Promise<RetentionGuardSummary> {
-  return { ran: false };
+export async function runRetentionGuard(deps: Deps): Promise<RetentionGuardSummary> {
+  return { ...(await runRetentionGuardSteps(deps)) };
 }
 
 export interface CronPollRouteOptions {

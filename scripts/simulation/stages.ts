@@ -16,15 +16,24 @@
 //                 owner opens the dashboard from the report
 //   M6  wednesday Wed 12:00 no emails, final statuses, outbox 15, every job finished; the dashboard's
 //                 statuses and #6's lead page with "Resume follow-ups"
-//   M3  test-lead the onboarding test lead's exclusions (since M6 also the dashboard and the metrics), last
+//   M3  test-lead the onboarding test lead's exclusions (since M6 also the dashboard and the metrics)
+//   M7  daily-maintenance  the week's 03:17 UTC ticks ran the real daily cron and one account_daily
+//                 job a day, each done, none sending anything, the refresh reading only finished leads
 //
 // DAILY_CAP_STAGES is a separate variant run (MAX_DRAFTED_LEADS_PER_DAY=1, its own outbox directory):
-// boot, the same pre-run, then Day 0 with the cap (daily-cap.ts).
+// boot, the same pre-run, then Day 0 with the cap (daily-cap.ts). The M7 variants are separate runs
+// too, each into its own outbox directory: BILLING_STAGES (subscribe during the trial → authenticated
+// → past the trial end → charged → active), LAPSE_STAGES (no subscription → inactive at the trial end,
+// one billing_inactive email, nothing read after it) (billing.ts) and DISCONNECT_STAGES (Disconnect →
+// purge 30 days later, tombstones only) (disconnect.ts).
+import { BILLING_VARIANT_STAGES, LAPSE_VARIANT_STAGES } from './billing';
+import { DAILY_MAINTENANCE_STAGE } from './daily';
 import { DAILY_CAP_STAGE } from './daily-cap';
 import { runDay0 } from './day0';
 import { runDay0Emails } from './day0-emails';
 import { FOLLOW_UP_STAGES } from './followups';
 import { runPreRun } from './pre-run';
+import { DISCONNECT_VARIANT_STAGES } from './disconnect';
 import { checkTestLeadExclusions } from './test-lead';
 import type { Simulation, Stage } from './types';
 import { WEEK_END_STAGES } from './week-end';
@@ -86,7 +95,16 @@ const testLead: Stage = {
   run: checkTestLeadExclusions,
 };
 
-export const STAGES: readonly Stage[] = [boot, preRun, day0, day0Emails, ...FOLLOW_UP_STAGES, ...WEEK_END_STAGES, testLead];
+export const STAGES: readonly Stage[] = [boot, preRun, day0, day0Emails, ...FOLLOW_UP_STAGES, ...WEEK_END_STAGES, testLead, DAILY_MAINTENANCE_STAGE];
 
 /** The daily-cap variant (M6, D-68's gate): the same onboarding, then Day 0 with one drafted lead a day. */
 export const DAILY_CAP_STAGES: readonly Stage[] = [boot, preRun, DAILY_CAP_STAGE];
+
+/** The billing variant (M7): the same onboarding, a subscription during the trial, active after it. */
+export const BILLING_STAGES: readonly Stage[] = [boot, preRun, ...BILLING_VARIANT_STAGES];
+
+/** The lapse variant (M7): the same onboarding, no subscription, inactive at the trial's end. */
+export const LAPSE_STAGES: readonly Stage[] = [boot, preRun, ...LAPSE_VARIANT_STAGES];
+
+/** The disconnect variant (M7): the same onboarding and Day 0, Disconnect, the purge 30 days later. */
+export const DISCONNECT_STAGES: readonly Stage[] = [boot, preRun, ...DISCONNECT_VARIANT_STAGES];

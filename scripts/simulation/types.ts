@@ -128,6 +128,8 @@ export interface Simulation {
   declareLead(ref: string, lead: { contactId: string; submittedAt: Date }): void;
   /** Records a timeline entry at the current simulated time. */
   record(kind: TimelineEntry['kind'], name: string, detail?: Detail): void;
+  /** The timeline so far (lead refs are filled in only at the end of the run). */
+  entries(): readonly TimelineEntry[];
   /** Records a check result; any failed check makes the run fail (exit 1). */
   check(id: string, ok: boolean, detail?: string): void;
   /** Set by the stage that produces the Monday report (M6). */

@@ -2,6 +2,7 @@ import 'server-only';
 import { registerAccountNotifications } from '@/server/services/accounts/emails';
 import { registerBaselineJobs } from '@/server/services/baseline/job';
 import { registerBriefJobs } from '@/server/services/brief/job';
+import { registerAccountDailyJob } from '@/server/services/daily/job';
 import { registerDraftingNotifications } from '@/server/services/drafting/cap';
 import { registerFollowUpJob } from '@/server/services/followups/job';
 import { registerInboxCheck } from '@/server/services/inbox-check/job';
@@ -51,6 +52,7 @@ export type Registration = (registries: Registries) => void;
  * reply_detected); the lead_cap resumer (services/drafting). M5: followup + its failure path (a
  * lead-page note) through registerFollowUpJob (services/followups). M6: weekly_report + its failure path
  * (`weekly_reports.status = 'failed'`), the weekly_report resumer and its failure hook (services/reports).
+ * M7: account_daily (services/daily; no failure path beyond the alert: tomorrow's job runs again).
  */
 const REGISTRATIONS: readonly Registration[] = [
   registerIntakeJobs,
@@ -63,6 +65,7 @@ const REGISTRATIONS: readonly Registration[] = [
   registerDraftingNotifications,
   registerFollowUpJob,
   registerWeeklyReportJob,
+  registerAccountDailyJob,
 ];
 
 /** Fresh registries holding every registration (the simulation's; the app uses the defaults below). */

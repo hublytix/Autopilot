@@ -163,11 +163,11 @@ async function handleEvent(tx: Db, event: HubSpotWebhookEvent, state: BatchState
     state.portals.set(event.portalId, portal);
   }
   const recorded = await tx.maybeOne<{ id: string }>(
-    `insert into webhook_events (provider, dedupe_key, body_sha256, portal_id, account_id, event_type, occurred_at, outcome)
-     values ('hubspot', $1, $2, $3, $4, $5, $6, 'received')
+    `insert into webhook_events (provider, dedupe_key, body_sha256, portal_id, account_id, event_type, occurred_at, outcome, recorded_at)
+     values ('hubspot', $1, $2, $3, $4, $5, $6, 'received', $7)
      on conflict (provider, dedupe_key) do nothing
      returning id`,
-    [webhookDedupeKey(event), state.bodySha256, event.portalId, portal?.accountId ?? null, event.subscriptionType, new Date(event.occurredAt)],
+    [webhookDedupeKey(event), state.bodySha256, event.portalId, portal?.accountId ?? null, event.subscriptionType, new Date(event.occurredAt), state.now],
   );
   if (recorded === null) {
     state.summary.duplicates += 1;

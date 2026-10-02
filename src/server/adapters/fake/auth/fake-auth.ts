@@ -112,6 +112,10 @@ export class FakeAuthProvider implements AuthProvider {
     return user === undefined ? null : { userId: user.userId };
   }
 
+  async getUserEmail(userId: string): Promise<string | null> {
+    return this.#userById(userId)?.email ?? null;
+  }
+
   async deleteUser(userId: string): Promise<void> {
     const user = this.#userById(userId);
     if (user === undefined) return;

@@ -5,8 +5,8 @@ import { log } from '@/server/obs/log';
 import type { Deps } from '@/server/ports';
 import { readPendingInstall, type PendingInstall } from '@/server/services/install/cookies';
 import { normaliseEmail, ONBOARDING_NEXT } from './login';
+import { deleteAuthUserUnlessReferenced, queueAuthUserDeletion } from './auth-user-deletion';
 import { deliverMagicLink, ensureAuthUser, issueMagicLink } from './magic-link';
-import { isAdminEmail } from './owner-scope';
 import { AUTH_RATE_LIMITS, hitAuthLimit, takeInstallEmailSlot } from './rate-limits';
 
 // /onboarding/email (PLAN §7.5, §9.1, D-35, D-36): the installer names the owner's email. It needs
@@ -15,7 +15,8 @@ import { AUTH_RATE_LIMITS, hitAuthLimit, takeInstallEmailSlot } from './rate-lim
 // cookie. It stores pending_owner_email (+24 h), creates or reuses the auth user and emails an
 // onboarding magic link. pending_owner_auth_user_id records only a user THIS flow created for this
 // account; a replaced one is deleted only when nothing refers to it, its address is no admin's, no
-// owner's and no other pending install's (D-62). Binding happens later in POST /auth/confirm, in any
+// owner's and no other pending install's (D-62); otherwise, or when the delete fails, it is queued
+// for the daily cron (D-82). Binding happens later in POST /auth/confirm, in any
 // browser: the cookie is not needed again.
 //
 // Every new address costs one of the install's 3 slots BEFORE the "already owns an account" answer,
@@ -85,28 +86,23 @@ export async function onboardingEmailContext(deps: Deps, pendingCookie: string |
 }
 
 /**
- * Deletes the replaced pending user `authUserId` (one this flow created for this account, last
- * pending for `email`) only when nothing refers to it any more (D-35, D-48, D-62): no users row, no
- * account lists it, its address is not in ADMIN_EMAILS, owns no account and is no other install's
- * unexpired pending owner email.
+ * Deletes the replaced pending user `authUserId` (one this flow created for this account) only when
+ * nothing refers to it any more (D-35, D-48, D-62, D-82; auth-user-deletion.ts): no users row, no
+ * account lists it, its address (ours, else the AuthProvider's) is not in ADMIN_EMAILS, owns no
+ * account and is no other install's unexpired pending owner email. Kept for another pending install,
+ * or not deleted because the AuthProvider failed: queued, and the daily cron tries again.
  */
 async function deleteReplacedAuthUser(deps: Deps, authUserId: string, email: string | null, accountId: string): Promise<void> {
-  if (email !== null && isAdminEmail(deps.env, email)) return;
-  const referenced = await deps.db.maybeOne(
-    `select 1 as referenced
-      where exists (select 1 from users where auth_user_id = $1 or ($2::text is not null and lower(email) = $2))
-         or exists (select 1 from accounts where pending_owner_auth_user_id = $1)
-         or ($2::text is not null and exists (
-              select 1 from accounts where lower(pending_owner_email) = $2 and pending_owner_expires_at > $3 and owner_user_id is null))`,
-    [authUserId, email?.toLowerCase() ?? null, deps.clock.now()],
-  );
-  if (referenced !== null) return;
   try {
-    await deps.auth.deleteUser(authUserId);
-    log.info('replaced pending auth user deleted', { event: 'auth.pending_user_deleted', accountId });
+    const outcome = await deleteAuthUserUnlessReferenced(deps, { userId: authUserId, email, exceptAccountId: null });
+    if (outcome === 'deleted') log.info('replaced pending auth user deleted', { event: 'auth.pending_user_deleted', accountId });
   } catch (error) {
-    // Left behind: it owns nothing, and the orphan purge's guarded delete covers it later.
-    log.warn('replaced pending auth user not deleted', { event: 'auth.pending_user_delete_failed', accountId, code: errorCode(error) });
+    log.warn('replaced pending auth user not deleted; queued', { event: 'auth.pending_user_delete_failed', accountId, code: errorCode(error) });
+    try {
+      await queueAuthUserDeletion(deps, authUserId);
+    } catch (queueError) {
+      log.warn('replaced pending auth user not queued', { event: 'auth.pending_user_queue_failed', accountId, code: errorCode(queueError) });
+    }
   }
 }
 

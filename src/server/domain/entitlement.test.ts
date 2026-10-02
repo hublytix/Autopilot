@@ -24,6 +24,7 @@ describe('entitled (D-18) after the trial', () => {
     ['expired', false],
     ['paused', false],
     ['stale', false],
+    ['unknown', false],
     ['resumed', true],
     ['some_new_status', false],
     ['', false],
@@ -33,7 +34,7 @@ describe('entitled (D-18) after the trial', () => {
     expect(entitled(trialOver, sub(status), NOW)).toBe(expected);
   });
 
-  it('covers every Razorpay status and the local stale status', () => {
+  it('covers every Razorpay status and the local stale and unknown statuses', () => {
     const covered = new Set(table.map(([status]) => status));
     for (const status of SUBSCRIPTION_STATUSES) expect(covered.has(status)).toBe(true);
     expect(RAZORPAY_SUBSCRIPTION_STATUSES).toHaveLength(9);
@@ -99,10 +100,24 @@ describe('currentSubscription', () => {
   });
 
   it('picks the latest logical created_at, whatever the order', () => {
-    const older = sub('active', { id: 'a', createdAt: new Date(NOW.getTime() - 5 * DAY) });
+    const older = sub('expired', { id: 'a', createdAt: new Date(NOW.getTime() - 5 * DAY) });
     const newer = sub('created', { id: 'b', createdAt: new Date(NOW.getTime() - DAY) });
     expect(currentSubscription([older, newer])).toBe(newer);
     expect(currentSubscription([newer, older])).toBe(newer);
+  });
+
+  it('prefers the newest row that still holds a mandate over newer rows without one (D-81)', () => {
+    const older = sub('active', { id: 'a', createdAt: new Date(NOW.getTime() - 5 * DAY) });
+    for (const status of ['created', 'stale', 'unknown', 'cancelled', 'expired', 'completed', 'unknown_status']) {
+      const newer = sub(status, { id: 'b', createdAt: new Date(NOW.getTime() - DAY) });
+      expect(currentSubscription([older, newer])).toBe(older);
+      expect(currentSubscription([newer, older])).toBe(older);
+    }
+    // Among rows with a mandate, the newest still wins (resumed counts as active).
+    for (const status of ['authenticated', 'active', 'pending', 'halted', 'paused', 'resumed']) {
+      const newer = sub(status, { id: 'b', createdAt: new Date(NOW.getTime() - DAY) });
+      expect(currentSubscription([older, newer])).toBe(newer);
+    }
   });
 
   it('breaks a created_at tie by id so the result does not depend on row order', () => {
@@ -113,9 +128,14 @@ describe('currentSubscription', () => {
     expect(currentSubscription([b, a])).toBe(b);
   });
 
-  it('decides entitlement from the current subscription only (a newer created row hides an older active one)', () => {
+  it('decides entitlement from the current subscription only', () => {
+    // The safety net cancelled the newer of two live subscriptions: the older one still pays.
     const older = sub('active', { id: 'a', createdAt: new Date(NOW.getTime() - 5 * DAY) });
-    const newer = sub('created', { id: 'b', createdAt: new Date(NOW.getTime() - DAY) });
-    expect(entitled(trialOver, currentSubscription([older, newer]), NOW)).toBe(false);
+    const cancelledNewer = sub('cancelled', { id: 'b', createdAt: new Date(NOW.getTime() - DAY) });
+    expect(entitled(trialOver, currentSubscription([older, cancelledNewer]), NOW)).toBe(true);
+    // A newer paused row (a mandate, not entitled) hides an older cancelled active one.
+    const oldCancelled = sub('cancelled', { id: 'c', createdAt: new Date(NOW.getTime() - 9 * DAY) });
+    const paused = sub('paused', { id: 'd', createdAt: new Date(NOW.getTime() - DAY) });
+    expect(entitled(trialOver, currentSubscription([oldCancelled, paused]), NOW)).toBe(false);
   });
 });

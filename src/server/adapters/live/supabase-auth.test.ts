@@ -122,6 +122,16 @@ describe('SupabaseAuthProvider admin calls', () => {
     await expect(auth.deleteUser(USER_ID)).resolves.toBeUndefined();
   });
 
+  it('reads a user’s address by id (lower-cased), null when the user is gone', async () => {
+    const { auth, calls } = provider({ [`GET /auth/v1/admin/users/${USER_ID}`]: () => json(200, { id: USER_ID, email: 'OWNER@brightside-plumbing.example' }) });
+    expect(await auth.getUserEmail(USER_ID)).toBe(EMAIL);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET /auth/v1/admin/users/${USER_ID}`]);
+    const { auth: gone } = provider({ [`GET /auth/v1/admin/users/${USER_ID}`]: () => json(404, { code: 'user_not_found' }) });
+    expect(await gone.getUserEmail(USER_ID)).toBeNull();
+    const { auth: down } = provider({ [`GET /auth/v1/admin/users/${USER_ID}`]: () => json(503, { message: 'down' }) });
+    expect(await codeOf(down.getUserEmail(USER_ID))).toBe('auth_unavailable');
+  });
+
   it('finds a user by email across pages, case-insensitively', async () => {
     const page = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, email: `user${i}@example.com` }));
     const { auth } = provider({

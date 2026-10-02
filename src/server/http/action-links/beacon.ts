@@ -6,6 +6,7 @@ import { clientIp } from '@/server/http/hubspot-install';
 import { log } from '@/server/obs/log';
 import type { Deps } from '@/server/ports';
 import { recordBeacon } from '@/server/services/action-links';
+import { readBoundedText } from '../bounded-body';
 
 // POST /a/{token}/beacon (D-26): the page beacon of the interstitial, the copy page and (M4) the
 // edit page. Same-origin only (PLAN §7.1 "origin"), a JSON body `{"n": "<nonce>"}` of at most 1 KiB,
@@ -21,10 +22,7 @@ function empty(status: number, extra: Record<string, string> = {}): Response {
 }
 
 async function readSmallBody(req: Request): Promise<string | null> {
-  const declared = Number(req.headers.get('content-length') ?? '0');
-  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return null;
-  const text = await req.text();
-  return Buffer.byteLength(text, 'utf8') > MAX_BODY_BYTES ? null : text;
+  return readBoundedText(req, MAX_BODY_BYTES);
 }
 
 export async function handleBeacon(req: Request, deps: Deps, token: string): Promise<Response> {
