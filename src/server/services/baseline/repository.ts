@@ -1,5 +1,6 @@
 import 'server-only';
 import { z } from 'zod';
+import { baselineReason, MAX_BASELINE_SUBMISSIONS, type BaselineReason } from '@/server/domain/baseline';
 import { BASELINE_STATUSES, JOB_STATUSES, type BaselineStatus } from '@/server/domain/types';
 import type { Db } from '@/server/db';
 import { percentWithout } from './figures';
@@ -7,8 +8,9 @@ import { percentWithout } from './figures';
 // `baselines` rows (PLAN §5, D-38): ids, counts and figures only, never content. The newest row is
 // the account's baseline; the Monday report (M6) compares against it.
 
-/** Above this many submissions in 30 days the baseline is "Not enough data" (D-38). */
-export const MAX_BASELINE_SUBMISSIONS = 500;
+// The reason rule is domain/baseline.ts's (the Monday report reads it too); re-exported here.
+export { baselineReason, MAX_BASELINE_SUBMISSIONS };
+export type { BaselineReason };
 
 export interface BaselineRecord {
   status: BaselineStatus;
@@ -90,17 +92,6 @@ export async function latestBaseline(db: Db, accountId: string): Promise<Baselin
   return raw === null ? null : toRecord(raw);
 }
 
-/** Why a baseline has no full figures, for the owner-facing copy. */
-export type BaselineReason =
-  /** More than 500 submissions in 30 days: "Not enough data". */
-  | 'too_many_submissions'
-  /** No lead in 30 days. */
-  | 'no_leads'
-  /** The portal has no logged outbound email in 30 days: "Not enough logged history". */
-  | 'no_logged_email'
-  /** Logged emails could not be read (scope missing, or the job gave up): "Not enough logged history". */
-  | 'not_readable';
-
 export type BaselineView =
   | { readonly state: 'not_started' }
   | { readonly state: 'running' }
@@ -111,14 +102,6 @@ export type BaselineView =
       /** Whole percent, only when `percentAvailable`. */
       readonly percentWithout: number | null;
     };
-
-export function baselineReason(record: BaselineRecord): BaselineReason | null {
-  if (record.status === 'ok') return null;
-  if (record.status === 'unavailable') return 'not_readable';
-  if (record.submissionsRead > MAX_BASELINE_SUBMISSIONS) return 'too_many_submissions';
-  if (record.leadsCounted === 0) return 'no_leads';
-  return 'no_logged_email';
-}
 
 const jobRow = z.object({ status: z.enum(JOB_STATUSES), created_at: z.date() });
 

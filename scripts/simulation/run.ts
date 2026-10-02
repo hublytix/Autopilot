@@ -12,6 +12,7 @@ import { migrate } from '@/server/db/migrate';
 import { createPgliteDb, type PgliteDb } from '@/server/db/pglite';
 import { parseEnv, type Env } from '@/server/env';
 import { CRON_POLL_PATH, handleCronPoll } from '@/server/http/cron-poll';
+import { CRON_WEEKLY_REPORT_PATH, handleCronWeeklyReport } from '@/server/http/cron-weekly-report';
 import { createSchedulerBridge } from '@/server/jobs/bridge';
 import { createJobHandlerRegistries } from '@/server/jobs/handlers';
 import type { Deps } from '@/server/ports';
@@ -47,6 +48,10 @@ export interface RunOptions {
   /** A migrated, empty PGlite (tests pass the harness dump); default a new in-memory one, migrated here. */
   db?: PgliteDb | undefined;
   stages?: readonly Stage[] | undefined;
+  /** The scenario's name in summary.json (default SCENARIO); a variant names itself (e.g. the daily-cap run). */
+  scenario?: string | undefined;
+  /** Fake-mode variables a variant changes (e.g. `MAX_DRAFTED_LEADS_PER_DAY`); only documented fake values. */
+  env?: Readonly<Record<string, string>> | undefined;
 }
 
 async function clearOutbox(dir: string): Promise<void> {
@@ -150,9 +155,21 @@ const pollSummarySchema = z.object({
   code: z.string().optional(),
 });
 
-/** The poll cron as Vercel Cron calls it: `GET /api/cron/poll` with `Authorization: Bearer CRON_SECRET`. */
-function cronPollRequest(env: Env): Request {
-  return new Request(`${env.APP_URL}${CRON_POLL_PATH}`, { headers: { authorization: `Bearer ${env.CRON_SECRET}` } });
+const weeklyReportSummarySchema = z.object({
+  ok: z.boolean(),
+  accounts: z.number().optional(),
+  due: z.number().optional(),
+  created: z.number().optional(),
+  existing: z.number().optional(),
+  published: z.number().optional(),
+  publishFailed: z.number().optional(),
+  errors: z.number().optional(),
+  code: z.string().optional(),
+});
+
+/** A cron route as Vercel Cron calls it: `GET` with `Authorization: Bearer CRON_SECRET`. */
+function cronRequest(env: Env, routePath: string): Request {
+  return new Request(`${env.APP_URL}${routePath}`, { headers: { authorization: `Bearer ${env.CRON_SECRET}` } });
 }
 
 /** Runs every stage in order and writes summary.json. Resolves with the summary; `ok` says whether every check passed. */
@@ -167,7 +184,7 @@ export async function runSimulation(options: RunOptions): Promise<SimulationSumm
 
   try {
     // Documented fake values only: the simulation is hermetic, whatever this shell exports.
-    const env = parseEnv({ APP_MODE: 'fake' });
+    const env = parseEnv({ ...options.env, APP_MODE: 'fake' });
 
     const timeline: TimelineEntry[] = [];
     const checks: CheckResult[] = [];
@@ -255,14 +272,14 @@ export async function runSimulation(options: RunOptions): Promise<SimulationSumm
     box.deps = deps;
     timeZone = fakes.hubspot.portal.timeZone;
 
-    // PLAN §8.1 periodic triggers. The weekly-report due-check (M6) and the daily run (M7) have no
-    // handler yet: their ticks are recorded so the timeline already shows the full schedule.
+    // PLAN §8.1 periodic triggers. The daily run (M7) has no handler yet: its ticks are recorded so
+    // the timeline already shows the full schedule.
     const crons: CronSeries[] = [
       {
         name: 'cron.poll',
         next: EVERY_5_MINUTES,
         run: async () => {
-          const response = await handleCronPoll(cronPollRequest(env), deps, {
+          const response = await handleCronPoll(cronRequest(env, CRON_POLL_PATH), deps, {
             sleep: async (ms) => {
               clock.advance(ms);
             },
@@ -283,8 +300,21 @@ export async function runSimulation(options: RunOptions): Promise<SimulationSumm
       {
         name: 'cron.weekly_report',
         next: HOURLY,
+        // The hourly Monday-report due-check (PLAN §8.1, D-17): creates the report and its job once
+        // the account's Monday 08:00 has come (the job runs after its stagger, through the scheduler).
         run: async () => {
-          record('tick', 'cron.weekly_report', { handler: 'none_until_m6' });
+          const response = await handleCronWeeklyReport(cronRequest(env, CRON_WEEKLY_REPORT_PATH), deps);
+          const body = weeklyReportSummarySchema.parse(await response.json());
+          record('tick', 'cron.weekly_report', {
+            httpStatus: response.status,
+            status: body.code ?? null,
+            accounts: body.accounts ?? null,
+            due: body.due ?? null,
+            created: body.created ?? null,
+            existing: body.existing ?? null,
+            published: body.published ?? null,
+            errors: body.errors ?? null,
+          });
         },
       },
       {
@@ -296,7 +326,7 @@ export async function runSimulation(options: RunOptions): Promise<SimulationSumm
       },
     ];
     const travel = new TimeTravel({ clock, scheduler: fakes.scheduler, crons, afterStep: noteNewLeads });
-    const scenario: ScenarioState = { accountId: null, ownerEmail: null, onboardingCompletedAt: null };
+    const scenario: ScenarioState = { accountId: null, ownerEmail: null, onboardingCompletedAt: null, ownerJar: null };
 
     const sim: Simulation = {
       clock,
@@ -347,7 +377,7 @@ export async function runSimulation(options: RunOptions): Promise<SimulationSumm
     const emails = await summariseEmails(fakes.mailer.sent, refById, options.outboxDir);
 
     const summary: SimulationSummary = {
-      scenario: SCENARIO,
+      scenario: options.scenario ?? SCENARIO,
       systemTime: options.systemTime ?? null,
       clock: { start: iso(SIMULATION_START), end: iso(clock.now()) },
       stages: stageSummaries,

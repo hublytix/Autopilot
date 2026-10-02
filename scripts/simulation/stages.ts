@@ -12,14 +12,22 @@
 //   M5  day-2     Thu follow-up 1 ×4 (#1 #2 #6 #5), sends confirmed from HubSpot, honest notes; statuses
 //   M5  day-3     Fri 14:00 #6 replies in HubSpot; nothing sent; statuses
 //   M5  day-5     Sun follow-up 2 ×3 (#1 #2 #5) + reply_detected ×1 (#6), every job finished; statuses
-//   M6+ Monday … Wednesday (PLAN §13 calendar), inserted before `test-lead`
-//   M3  test-lead the onboarding test lead's exclusions, checked last
+//   M6  monday    Mon 08:00 the due-check → weekly_report ×1, the FULL metrics JSON (PLAN §13); 09:30 the
+//                 owner opens the dashboard from the report
+//   M6  wednesday Wed 12:00 no emails, final statuses, outbox 15, every job finished; the dashboard's
+//                 statuses and #6's lead page with "Resume follow-ups"
+//   M3  test-lead the onboarding test lead's exclusions (since M6 also the dashboard and the metrics), last
+//
+// DAILY_CAP_STAGES is a separate variant run (MAX_DRAFTED_LEADS_PER_DAY=1, its own outbox directory):
+// boot, the same pre-run, then Day 0 with the cap (daily-cap.ts).
+import { DAILY_CAP_STAGE } from './daily-cap';
 import { runDay0 } from './day0';
 import { runDay0Emails } from './day0-emails';
 import { FOLLOW_UP_STAGES } from './followups';
 import { runPreRun } from './pre-run';
 import { checkTestLeadExclusions } from './test-lead';
 import type { Simulation, Stage } from './types';
+import { WEEK_END_STAGES } from './week-end';
 
 const boot: Stage = {
   id: 'boot',
@@ -78,4 +86,7 @@ const testLead: Stage = {
   run: checkTestLeadExclusions,
 };
 
-export const STAGES: readonly Stage[] = [boot, preRun, day0, day0Emails, ...FOLLOW_UP_STAGES, testLead];
+export const STAGES: readonly Stage[] = [boot, preRun, day0, day0Emails, ...FOLLOW_UP_STAGES, ...WEEK_END_STAGES, testLead];
+
+/** The daily-cap variant (M6, D-68's gate): the same onboarding, then Day 0 with one drafted lead a day. */
+export const DAILY_CAP_STAGES: readonly Stage[] = [boot, preRun, DAILY_CAP_STAGE];

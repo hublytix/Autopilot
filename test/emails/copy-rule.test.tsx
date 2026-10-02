@@ -16,11 +16,13 @@ import { ReconnectHubSpot, reconnectHubSpotSubject } from '@/emails/ReconnectHub
 import { ReplyDetected, replyDetectedSubject } from '@/emails/ReplyDetected';
 import { SettingsChangeAlert, settingsChangeAlertSubject } from '@/emails/SettingsChangeAlert';
 import { VerifyNotify, verifyNotifySubject } from '@/emails/VerifyNotify';
-import { WEEKLY_REPORT_HONESTY_LINE, WeeklyReport, weeklyReportSubject } from '@/emails/WeeklyReport';
+import { SENDS_NOT_CONFIRMABLE, WEEKLY_REPORT_HONESTY_LINE, WEEKLY_REPORT_LABELS, WeeklyReport, weeklyReportSubject } from '@/emails/WeeklyReport';
 import { newLeadSubject } from '@/server/domain/subject';
+import type { WeeklyMetrics } from '@/server/domain/weekly-metrics';
 import { renderEmail } from '@/server/email/render';
 import { EDIT_CROSS_ORIGIN_MESSAGE, EDIT_HINTS, EDIT_INPUT_ERRORS } from '@/server/http/action-links/edit';
 import { ACTION_LINK_MESSAGES, neverSendsLine } from '@/server/http/action-links/messages';
+import { weeklyReportProps } from '@/server/services/reports/present';
 
 // The copy rule (D-37, PLAN §1.2, §12 Domain): an unqualified "reply"/"replied" always means the
 // lead's. Every reply the owner sends is qualified with "you", "your" or "from you" ("your reply is
@@ -39,6 +41,8 @@ const LEAD_SIDE: readonly RegExp[] = [
   /\b(?:\p{Lu}[\p{L}'-]*|lead) (?:replied|REPLIED)\b/gu,
   /\blead replies\b/giu,
   /\breplies from leads\b/giu,
+  // "a lead's reply", "your leads' replies": the possessive names the lead.
+  /\blead(?:'s|s') (?:reply|replies)\b/giu,
   /\breplies you get\b/giu,
   /\blogged a reply from\b/giu,
   /\blog(?:s|ging)? replies for you\b/giu,
@@ -74,6 +78,7 @@ describe('the copy rule checker', () => {
       '% with no logged reply from you',
       'No reply from this lead is logged in HubSpot.',
       'Maya replied — follow-ups stopped',
+      "a send of yours or a lead's reply that's missing here",
       'HubSpot logged a reply from Maya.',
       'Replies from leads',
     ]) {
@@ -105,6 +110,53 @@ const LEAD_EMAIL_BASE = {
   draftBody: 'Hi Maya,\n\nThanks for getting in touch.\n\nDana',
   ...URLS,
 };
+
+const WEEKLY_METRICS: WeeklyMetrics = {
+  version: 1,
+  period: { start: '2026-10-05T12:00:00.000Z', end: '2026-10-12T12:00:00.000Z' },
+  basis: { loggingMode: 'log_all', emailScope: true, sendsLogged: true, repliesLogged: true },
+  cohort: {
+    leadsIn: 6,
+    filtered: 2,
+    draftsEmailed: 4,
+    sendsConfirmed: 3,
+    sendLinkOpenedNotConfirmed: 1,
+    medianTimeToFirstReply: { seconds: 1260, samples: 3 },
+    waiting: { count: 1, leads: [{ leadId: 'lead-2', submittedAt: '2026-10-06T14:05:00.000Z', recordUrl: 'https://app.hubspot.com/contacts/1/record/0-1/2' }], more: 0 },
+    unchecked: 0,
+  },
+  events: { repliesFromLeads: 1, followUpsDrafted: 7 },
+  comparison: { baseline: 'ok', baselineMedianSeconds: 12600, baselinePercentWithoutReply: 20, medianSeconds: 1260, percentWithoutReply: 25, population: 4, withoutReply: 1 },
+};
+
+function weeklyReportVariants(): [string, WeeklyMetrics][] {
+  const many = Array.from({ length: 20 }, (_, i) => ({ leadId: `lead-${i}`, submittedAt: '2026-10-06T14:05:00.000Z', recordUrl: i === 0 ? null : 'https://app.hubspot.com/contacts/1/record/0-1/2' }));
+  return [
+    ['WeeklyReport', WEEKLY_METRICS],
+    [
+      'WeeklyReport sends not confirmable',
+      {
+        ...WEEKLY_METRICS,
+        basis: { loggingMode: 'unknown', emailScope: false, sendsLogged: false, repliesLogged: false },
+        cohort: { ...WEEKLY_METRICS.cohort, sendsConfirmed: null, medianTimeToFirstReply: { seconds: null, samples: 0 }, waiting: null },
+        events: { repliesFromLeads: null, followUpsDrafted: 0 },
+        comparison: { ...WEEKLY_METRICS.comparison, medianSeconds: null, percentWithoutReply: null, baselineMedianSeconds: null },
+      },
+    ],
+    ['WeeklyReport many waiting', { ...WEEKLY_METRICS, cohort: { ...WEEKLY_METRICS.cohort, waiting: { count: 23, leads: many, more: 3 } } }],
+    ['WeeklyReport baseline not measured', { ...WEEKLY_METRICS, comparison: { ...WEEKLY_METRICS.comparison, baseline: 'no_logged_email', baselineMedianSeconds: null, baselinePercentWithoutReply: null } }],
+    ['WeeklyReport baseline too many submissions', { ...WEEKLY_METRICS, comparison: { ...WEEKLY_METRICS.comparison, baseline: 'too_many_submissions', baselineMedianSeconds: null, baselinePercentWithoutReply: null } }],
+    [
+      'WeeklyReport leads unchecked',
+      {
+        ...WEEKLY_METRICS,
+        cohort: { ...WEEKLY_METRICS.cohort, waiting: { count: 0, leads: [], more: 0 }, unchecked: 2 },
+        comparison: { ...WEEKLY_METRICS.comparison, percentWithoutReply: null },
+      },
+    ],
+    ['WeeklyReport no baseline', { ...WEEKLY_METRICS, comparison: { ...WEEKLY_METRICS.comparison, baseline: 'none', baselineMedianSeconds: null, baselinePercentWithoutReply: null } }],
+  ];
+}
 
 function ownerEmails(): [string, ReactElement][] {
   const emails: [string, ReactElement][] = [];
@@ -146,23 +198,11 @@ function ownerEmails(): [string, ReactElement][] {
     }),
   ]);
   emails.push(['LeadCapReached', createElement(LeadCapReached, { productName: PRODUCT, limit: 50, dashboardUrl: 'http://localhost:3000/dashboard' })]);
-  emails.push([
-    'WeeklyReport',
-    createElement(WeeklyReport, {
-      productName: PRODUCT,
-      weekLabel: 'Mon 5 Oct – Sun 11 Oct',
-      rows: [
-        { label: 'Leads in', value: '6' },
-        { label: 'Drafts emailed to you', value: '4' },
-        { label: 'Your sends confirmed in HubSpot', value: '2' },
-        { label: 'Send link opened, not confirmed', value: '1' },
-        { label: 'Median time to your first reply (logged in HubSpot)', value: null },
-        { label: 'Leads still waiting for your reply (nothing logged in HubSpot)', value: '2' },
-        { label: 'Replies from leads', value: '1' },
-      ],
-      dashboardUrl: 'http://localhost:3000/dashboard',
-    }),
-  ]);
+  // The Monday report (D-37): the PLAN §13 report, and every honesty variant (unconfirmable sends,
+  // "Not enough data", the baseline's "Not enough logged history" or none, "and N more").
+  for (const [name, metrics] of weeklyReportVariants()) {
+    emails.push([name, createElement(WeeklyReport, weeklyReportProps(metrics, { productName: PRODUCT, timezone: 'America/New_York', dashboardUrl: 'http://localhost:3000/dashboard' }))]);
+  }
   emails.push(['BillingInactive', createElement(BillingInactive, { productName: PRODUCT, billingUrl: 'http://localhost:3000/billing' })]);
   emails.push(['ReconnectHubSpot', createElement(ReconnectHubSpot, { productName: PRODUCT, reconnectUrl: 'http://localhost:3000/login', purgeDate: '6 Nov 2026' })]);
   for (const variant of ['sign_in', 'onboarding', 'reconnect'] as const satisfies readonly MagicLinkVariant[]) {
@@ -212,6 +252,8 @@ describe('the copy rule on owner emails (D-37)', () => {
       ...FLAGS.flatMap((flag) => [draftFlagLine(flag, { allowPricing: true }), draftFlagLine(flag, { allowPricing: false })]),
       ...WHYS.map(needsTouchReasonText),
       WEEKLY_REPORT_HONESTY_LINE,
+      ...Object.values(WEEKLY_REPORT_LABELS),
+      SENDS_NOT_CONFIRMABLE,
     ];
     for (const line of lines) expect(unqualified(line), line).toEqual([]);
   });

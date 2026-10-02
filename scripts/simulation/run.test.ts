@@ -4,8 +4,9 @@ import path from 'node:path';
 import { Settings } from 'luxon';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb } from '../../test/db/harness';
+import { DAILY_CAP_ENV, DAILY_CAP_SCENARIO } from './daily-cap';
 import { runSimulation, SIMULATION_START } from './run';
-import { BOOT_STAGE, STAGES } from './stages';
+import { BOOT_STAGE, DAILY_CAP_STAGES, STAGES } from './stages';
 import type { SimulationSummary, Stage } from './types';
 
 let outboxDir: string;
@@ -145,9 +146,9 @@ describe('simulation stage 1 (M1)', () => {
   });
 });
 
-// The full run takes a while (five simulated days of 5-minute polls), so the stage 2–5 tests share
+// The full run takes a while (eight simulated days of 5-minute polls), so the stage 2–6 tests share
 // one run (and its outbox directory); the 2030 run is the only other full run.
-describe('simulation stages 2–5 (M2–M5): the real pre-run, Day 0 intake, drafts, new_lead emails, action links, follow-ups and the reply', () => {
+describe('simulation stages 2–6 (M2–M6): the real pre-run, Day 0 intake, drafts, new_lead emails, action links, follow-ups, the reply, the Monday report and the dashboard', () => {
   let fullDir: string;
   let summary: SimulationSummary;
 
@@ -165,7 +166,7 @@ describe('simulation stages 2–5 (M2–M5): the real pre-run, Day 0 intake, dra
     await rm(fullDir, { recursive: true, force: true });
   });
 
-  it('passes every check: 6 leads, #3 and #4 filtered, #5 found by the 10:35 cron poll, no historical lead, then 2 pre-run emails, new_lead ×4, follow_up ×4, follow_up ×3 + reply_detected', async () => {
+  it('passes every check: 6 leads, #3 and #4 filtered, #5 found by the 10:35 cron poll, no historical lead, then 2 pre-run emails, new_lead ×4, follow_up ×4, follow_up ×3 + reply_detected, weekly_report ×1', async () => {
     expect(summary.checks.filter((check) => !check.ok)).toEqual([]);
     expect(summary.ok).toBe(true);
     expect(summary.stages.map((stage) => [stage.id, stage.milestone])).toEqual([
@@ -177,6 +178,8 @@ describe('simulation stages 2–5 (M2–M5): the real pre-run, Day 0 intake, dra
       ['day-2', 'M5'],
       ['day-3', 'M5'],
       ['day-5', 'M5'],
+      ['monday', 'M6'],
+      ['wednesday', 'M6'],
       ['test-lead', 'M3'],
     ]);
     expect(summary.leads.map((lead) => [lead.ref, lead.classification, lead.processingState, lead.intakeTrigger, lead.isTest, lead.stopReason])).toEqual([
@@ -207,6 +210,8 @@ describe('simulation stages 2–5 (M2–M5): the real pre-run, Day 0 intake, dra
       [12, '2026-10-11T14:05:00.000Z', 'follow_up', 'L2', owner, '012-follow_up-L2'],
       [13, '2026-10-11T14:20:00.000Z', 'reply_detected', 'L6', owner, '013-reply_detected-L6'],
       [14, '2026-10-11T14:35:00.000Z', 'follow_up', 'L5', owner, '014-follow_up-L5'],
+      // Monday: the report, after the due-check at 08:00 local and the portal's stagger.
+      [15, '2026-10-12T12:15:03.000Z', 'weekly_report', null, owner, '015-weekly_report'],
     ]);
     expect(summary.emails.slice(2).map((email) => email.subject)).toEqual([
       'New lead: Jordan — your reply is ready',
@@ -221,6 +226,7 @@ describe('simulation stages 2–5 (M2–M5): the real pre-run, Day 0 intake, dra
       'Follow-up 2 for Alex — your draft is ready',
       'Riley replied — follow-ups stopped',
       'Follow-up 2 for Lena — your draft is ready',
+      'Hublytix Autopilot weekly report: Mon 5 Oct – Mon 12 Oct',
     ]);
     // Every email is in the outbox directory as NNN-<kind>[-<lead ref>].html and .txt.
     expect((await readdir(fullDir)).sort()).toEqual([
@@ -232,7 +238,7 @@ describe('simulation stages 2–5 (M2–M5): the real pre-run, Day 0 intake, dra
       summary.emails.filter((email) => email.kind === 'follow_up').map(async (email) => [email.file, (await readFile(path.join(fullDir, `${email.file}.txt`), 'utf8')).includes("We couldn't confirm in HubSpot that your first reply was sent.")]),
     );
     expect(unconfirmed.filter(([, has]) => has).map(([file]) => file)).toEqual(['008-follow_up-L2', '012-follow_up-L2']);
-    expect(summary.clock).toEqual({ start: '2026-10-06T13:00:00.000Z', end: '2026-10-11T14:45:00.000Z' });
+    expect(summary.clock).toEqual({ start: '2026-10-06T13:00:00.000Z', end: '2026-10-14T16:00:00.000Z' });
     // No database id (account, lead, job, user) anywhere; the fixture's form ids are UUID-shaped but fixed.
     expect(JSON.stringify(summary).replaceAll(/b1f0c6a2-3d4e-4f50-8a61-7b2c9d0e1f0[1-3]/g, 'form')).not.toMatch(UUID);
   });
@@ -286,15 +292,23 @@ describe('simulation stages 2–5 (M2–M5): the real pre-run, Day 0 intake, dra
     const day0Polls = summary.timeline.filter((entry) => entry.name === 'cron.poll' && entry.local.startsWith('Tue')).map((entry) => entry.local.slice(15, 20));
     expect(day0Polls.slice(0, 22)).toEqual(['09:00', '09:05', '09:10', '09:15', '09:20', '09:25', '09:30', '09:35', '09:40', '09:45', '09:50', '09:55',
       '10:00', '10:05', '10:10', '10:15', '10:20', '10:25', '10:30', '10:35', '10:40', '10:45']);
-    // Every 5 minutes from Tue 09:00 to Sun 10:45 local, none missed.
-    expect(summary.timeline.filter((entry) => entry.name === 'cron.poll')).toHaveLength((5 * 24 * 60 + 105) / 5 + 1);
-    // The hourly due-check (M6) and the daily 03:17 UTC run (M7) are recorded as no-ops so far.
+    // Every 5 minutes from Tue 09:00 to Wed 10-14 12:00 local, none missed.
+    expect(summary.timeline.filter((entry) => entry.name === 'cron.poll')).toHaveLength((8 * 24 * 60 + 180) / 5 + 1);
+    // The hourly due-check (M6): nothing is due until Monday 08:00 local, which creates the report;
+    // the rest of Monday finds it existing; Tuesday and Wednesday are not due. The daily 03:17 UTC
+    // run (M7) is still recorded as a no-op.
     const weekly = summary.timeline.filter((entry) => entry.name === 'cron.weekly_report');
     expect(weekly.slice(0, 2).map((entry) => entry.local.slice(15, 20))).toEqual(['09:00', '10:00']);
-    expect(weekly).toHaveLength(5 * 24 + 2);
-    expect(weekly.every((entry) => entry.detail?.handler === 'none_until_m6')).toBe(true);
+    expect(weekly).toHaveLength(8 * 24 + 4);
+    expect(weekly.every((entry) => entry.detail?.httpStatus === 200 && entry.detail.errors === 0)).toBe(true);
+    const created = weekly.filter((entry) => entry.detail?.created === 1);
+    expect(created.map((entry) => [entry.local, entry.detail?.published])).toEqual([['Mon 2026-10-12 08:00:00', 1]]);
+    const existing = weekly.filter((entry) => entry.detail?.existing === 1).map((entry) => entry.local.slice(15, 20));
+    expect(existing).toEqual(['09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00', '22:00', '23:00']);
+    expect(weekly.filter((entry) => entry.detail?.due === 1)).toHaveLength(16);
     const daily = summary.timeline.filter((entry) => entry.name === 'cron.daily');
-    expect(daily.map((entry) => entry.at)).toEqual(['2026-10-07T03:17:00.000Z', '2026-10-08T03:17:00.000Z', '2026-10-09T03:17:00.000Z', '2026-10-10T03:17:00.000Z', '2026-10-11T03:17:00.000Z']);
+    expect(daily.map((entry) => entry.at.slice(0, 10))).toEqual(['2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14']);
+    expect(daily.every((entry) => entry.at.endsWith('T03:17:00.000Z'))).toBe(true);
     expect(daily.every((entry) => entry.detail?.handler === 'none_until_m7')).toBe(true);
 
     const intake = summary.timeline.filter((entry) => entry.name === 'lead.created').map((entry) => [entry.local.slice(15, 20), entry.detail?.lead, entry.detail?.trigger]);
@@ -398,6 +412,54 @@ describe('simulation stages 2–5 (M2–M5): the real pre-run, Day 0 intake, dra
     );
   });
 
+  it('runs Monday and Wednesday at the PLAN §13 times: the report with the exact metrics JSON, no emails after it, the final statuses and the dashboard', () => {
+    // PLAN §13 "Expected weekly metrics" (the full JSON), the waiting lead named by its ref.
+    expect(summary.weeklyReport).toEqual({
+      version: 1,
+      period: { start: '2026-10-05T12:00:00.000Z', end: '2026-10-12T12:00:00.000Z' },
+      basis: { loggingMode: 'log_all', emailScope: true, sendsLogged: true, repliesLogged: true },
+      cohort: {
+        leadsIn: 6,
+        filtered: 2,
+        draftsEmailed: 4,
+        sendsConfirmed: 3,
+        sendLinkOpenedNotConfirmed: 1,
+        medianTimeToFirstReply: { seconds: 21 * 60, samples: 3 },
+        waiting: { count: 1, leads: [{ leadId: 'L2', submittedAt: '2026-10-06T14:05:00.000Z', recordUrl: 'https://app.hubspot.com/contacts/1234567/record/0-1/1003' }], more: 0 },
+        unchecked: 0,
+      },
+      events: { repliesFromLeads: 1, followUpsDrafted: 7 },
+      comparison: { baseline: 'ok', baselineMedianSeconds: 3.5 * 3600, baselinePercentWithoutReply: 20, medianSeconds: 21 * 60, percentWithoutReply: 25, population: 4, withoutReply: 1 },
+    });
+    const steps = summary.timeline.filter((entry) => (entry.stage === 'monday' || entry.stage === 'wednesday') && entry.kind !== 'tick');
+    expect(steps.map((entry) => [entry.local, entry.name, entry.detail?.jobStatus ?? entry.detail?.from ?? null])).toEqual([
+      ['Mon 2026-10-12 08:15:03', 'job.weekly_report', 'done'],
+      ['Mon 2026-10-12 09:30:00', 'dashboard.opened_by_owner', 'weekly_report'],
+    ]);
+    const m6 = summary.checks.filter((check) => check.stage === 'monday' || check.stage === 'wednesday');
+    expect(m6.every((check) => check.ok)).toBe(true);
+    expect(m6.map((check) => check.id)).toEqual(
+      expect.arrayContaining([
+        'monday.due_check_at_0800_local_creates_one_staggered_job',
+        'monday.one_weekly_report_email_after_0800',
+        'monday.weekly_metrics_json_exactly_as_plan_13',
+        'wednesday.no_emails_since_monday',
+        'wednesday.final_statuses',
+        'wednesday.outbox_is_15_emails_2_4_4_4_1',
+        'wednesday.every_job_done_cancelled_or_skipped',
+        'wednesday.dashboard_lists_the_6_leads_with_their_final_statuses',
+        'wednesday.L6.lead_page_offers_resume_follow_ups',
+        'wednesday.L6.reply_detected_email_links_the_lead_page',
+      ]),
+    );
+    expect(summary.checks.find((check) => check.id === 'wednesday.final_statuses')?.detail).toBe(
+      'L1 no_reply, L2 no_reply, L3 filtered, L4 filtered, L6 replied, L5 no_reply',
+    );
+    expect(summary.checks.filter((check) => check.stage === 'test-lead').map((check) => check.id)).toEqual(
+      expect.arrayContaining(['test_lead.absent_from_the_dashboard', 'test_lead.absent_from_every_weekly_report', 'test_lead.never_read_for_signals']),
+    );
+  });
+
   it('produces the same summary with the system time set to 2030 (it never reads the wall clock)', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
@@ -405,5 +467,37 @@ describe('simulation stages 2–5 (M2–M5): the real pre-run, Day 0 intake, dra
     expect(in2030.systemTime).toBe('2030');
     expect(in2030.ok).toBe(true);
     expect({ ...in2030, systemTime: null }).toEqual(summary);
+  }, 300_000);
+});
+
+describe('the daily-cap variant (M6, MAX_DRAFTED_LEADS_PER_DAY=1)', () => {
+  it('drafts #1 only, defers #2 #5 #6 with exactly one lead_cap email, and lists them on the dashboard as Not processed', async () => {
+    const db = await createTestDb();
+    let summary: SimulationSummary;
+    try {
+      summary = await runSimulation({ outboxDir, systemTime: null, db, stages: DAILY_CAP_STAGES, scenario: DAILY_CAP_SCENARIO, env: DAILY_CAP_ENV });
+    } finally {
+      await db.close();
+    }
+    expect(summary.checks.filter((check) => !check.ok)).toEqual([]);
+    expect(summary.scenario).toBe('brightside-plumbing-daily-cap');
+    expect(summary.emails.map((email) => [email.kind, email.lead])).toEqual([
+      ['magic_link', null],
+      ['inbox_test', null],
+      ['new_lead', 'L1'],
+      ['lead_cap', null],
+    ]);
+    expect(summary.leads.map((lead) => [lead.ref, lead.processingState])).toEqual([
+      ['L1', 'notified'],
+      ['L2', 'deferred'],
+      ['L3', 'filtered'],
+      ['L4', 'filtered'],
+      ['L5', 'deferred'],
+      ['L6', 'deferred'],
+    ]);
+    expect(summary.checks.find((check) => check.id === 'cap.dashboard_lists_deferred_leads_as_not_processed')?.detail).toBe(
+      'L1 Drafted, L2 Not processed (daily_cap), L3 Filtered, L4 Filtered, L6 Not processed (daily_cap), L5 Not processed (daily_cap)',
+    );
+    expect(summary.weeklyReport).toBeNull();
   }, 300_000);
 });

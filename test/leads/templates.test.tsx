@@ -201,7 +201,8 @@ describe('ReplyDetected', () => {
     expect(text).toContain('HubSpot logged a reply from Maya on Thu 8 Oct, 11:20.');
     expect(html).toContain(`href="${recordUrl}"`);
     expect(actionLinks(html)).toEqual([]);
-    // No page offers "Resume follow-ups" before M6: the email does not promise it (law 5, D-73).
+    // Without the lead page's URL the email promises no "Resume follow-ups" (law 5, D-73); the
+    // notification plan passes the lead page (M6), which offers it.
     expect(text).not.toMatch(/resume follow-ups|dashboard/i);
   });
 

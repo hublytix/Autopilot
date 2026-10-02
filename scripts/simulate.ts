@@ -10,17 +10,18 @@
 // first" and "Not a real lead" on the new_lead emails, and every action link of those emails
 // resolving without counting a click), Days 1–5 (M5: #5's send on Wednesday, follow-up 1 ×4 on
 // Thursday, #6's reply on Friday, follow-up 2 ×3 and reply_detected on Sunday, statuses after each
-// step), and the test-lead exclusions (M3); see scripts/simulation/stages.ts.
+// step), Monday's report and Wednesday's final statuses and dashboard (M6), and the test-lead
+// exclusions (M3); see scripts/simulation/stages.ts. Then the daily-cap variant (M6,
+// MAX_DRAFTED_LEADS_PER_DAY=1) runs on its own into ./outbox/daily-cap/.
 import path from 'node:path';
-import { runSimulation, SUMMARY_FILE } from './simulation/run';
+import { DAILY_CAP_ENV, DAILY_CAP_SCENARIO } from './simulation/daily-cap';
+import { runSimulation, SUMMARY_FILE, type RunOptions } from './simulation/run';
+import { DAILY_CAP_STAGES } from './simulation/stages';
+import type { SimulationSummary } from './simulation/types';
 
-async function main(): Promise<number> {
-  const outboxDir = path.join(process.cwd(), 'outbox');
-  const systemTime = process.env.SIMULATE_SYSTEM_TIME?.trim() || null;
-  const summary = await runSimulation({ outboxDir, systemTime });
-
+function report(summary: SimulationSummary, outboxDir: string): void {
   for (const check of summary.checks.filter((c) => !c.ok)) {
-    console.error(`simulate: FAIL [${check.stage}] ${check.id}${check.detail !== undefined ? `: ${check.detail}` : ''}`);
+    console.error(`simulate: FAIL [${summary.scenario}/${check.stage}] ${check.id}${check.detail !== undefined ? `: ${check.detail}` : ''}`);
   }
   const passed = summary.checks.filter((c) => c.ok).length;
   const stages = summary.stages.map((s) => `${s.id}(${s.milestone})`).join(', ');
@@ -29,7 +30,24 @@ async function main(): Promise<number> {
       `emails=${summary.emails.length} leads=${summary.leads.length} checks=${passed}/${summary.checks.length} ` +
       `systemTime=${summary.systemTime ?? 'unset'} ok=${String(summary.ok)} -> ${path.relative(process.cwd(), path.join(outboxDir, SUMMARY_FILE))}`,
   );
-  return summary.ok ? 0 : 1;
+}
+
+async function main(): Promise<number> {
+  const outboxDir = path.join(process.cwd(), 'outbox');
+  const systemTime = process.env.SIMULATE_SYSTEM_TIME?.trim() || null;
+  const runs: RunOptions[] = [
+    // The PLAN §13 week: ./outbox/NNN-<kind>-<lead>.html/.txt and ./outbox/summary.json.
+    { outboxDir, systemTime },
+    // The daily-cap variant (M6): its own directory, so the main outbox is exactly the 15 emails.
+    { outboxDir: path.join(outboxDir, 'daily-cap'), systemTime, stages: DAILY_CAP_STAGES, scenario: DAILY_CAP_SCENARIO, env: DAILY_CAP_ENV },
+  ];
+  let ok = true;
+  for (const options of runs) {
+    const summary = await runSimulation(options);
+    report(summary, options.outboxDir);
+    ok &&= summary.ok;
+  }
+  return ok ? 0 : 1;
 }
 
 main().then(

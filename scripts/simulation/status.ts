@@ -4,6 +4,7 @@
 import { DateTime } from 'luxon';
 import { deriveLeadStatus } from '@/server/domain/lead-status';
 import { isClassification, isStopReason, type LeadDisplayStatus, type LeadProcessingState } from '@/server/domain/types';
+import { canReadEmails } from '@/server/hubspot/scopes';
 import type { Simulation } from './types';
 
 interface StatusRow {
@@ -22,6 +23,8 @@ interface StatusRow {
   send_confirmed_at: Date | null;
   signals_checked_at: Date | null;
   followups_enabled: boolean;
+  logging_mode: string;
+  scopes: string[] | null;
 }
 
 export async function statusOf(sim: Simulation, leadId: string | null): Promise<{ row: StatusRow; status: LeadDisplayStatus } | null> {
@@ -29,8 +32,10 @@ export async function statusOf(sim: Simulation, leadId: string | null): Promise<
   const row = await sim.db.maybeOne<StatusRow>(
     `select l.id, l.processing_state, l.classification, l.classification_override, l.process_rev, l.stop_reason, l.dismissed_at,
             l.replied_at, l.first_notified_at, l.fu1_notified_at, l.fu2_notified_at, l.first_send_clicked_at, l.send_confirmed_at, l.signals_checked_at,
-            s.followups_enabled
+            s.followups_enabled, a.logging_mode, c.scopes
        from public.leads l join public.settings s on s.account_id = l.account_id
+       join public.accounts a on a.id = l.account_id
+       left join public.hubspot_connections c on c.account_id = l.account_id
       where l.id = $1`,
     [leadId],
   );
@@ -51,6 +56,7 @@ export async function statusOf(sim: Simulation, leadId: string | null): Promise<
       sendConfirmedAt: row.send_confirmed_at,
       signalsCheckedAt: row.signals_checked_at,
       followupsEnabled: row.followups_enabled,
+      repliesLogged: row.logging_mode === 'log_all' && canReadEmails(row.scopes ?? []),
     },
     sim.clock.now(),
   );

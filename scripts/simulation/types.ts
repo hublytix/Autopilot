@@ -4,6 +4,7 @@ import type { FakeClock } from '@/server/adapters/fake/clock';
 import type { FakeAdapters } from '@/server/adapters/fake';
 import type { PgliteDb } from '@/server/db/pglite';
 import type { Deps } from '@/server/ports';
+import type { CookieJar } from '@/server/security/cookies';
 import type { TimeTravel } from './engine';
 
 export type Milestone = 'M1' | 'M2' | 'M3' | 'M4' | 'M5' | 'M6' | 'M7' | 'M8';
@@ -89,7 +90,10 @@ export interface SimulationSummary {
   timeline: TimelineEntry[];
   emails: EmailSummary[];
   leads: LeadSummary[];
-  /** The Monday report's metrics once M6 enables it. */
+  /**
+   * The Monday report's `weekly_reports.metrics` (M6), with each waiting lead's id replaced by its
+   * ref (`L2`) so the summary stays the same from run to run; null when the scenario has no Monday.
+   */
   weeklyReport: unknown;
   checks: CheckResult[];
   ok: boolean;
@@ -102,6 +106,8 @@ export interface ScenarioState {
   ownerEmail: string | null;
   /** When onboarding completed: the intake floors (PLAN §13 "floors equal the onboarding-complete time"). */
   onboardingCompletedAt: Date | null;
+  /** The owner's browser (the session cookie set by /auth/confirm); later stages open the dashboard with it. */
+  ownerJar: CookieJar | null;
 }
 
 /** What every stage works with. */

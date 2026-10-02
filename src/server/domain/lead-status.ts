@@ -15,10 +15,12 @@ import {
 //   3. filtered        a filtered class, not overridden ("This is a real lead", D-42)
 //   4. not_processed   processing_state is failed, skipped or deferred
 //   5. no_reply        follow-ups finished or off, at least 2 days since the last email to the owner
-//                      about this lead, and HubSpot was read in full (every logged email) after the
-//                      owner email before that one: the check that let the last email go out, or a
-//                      later one. Without such a check nobody looked, so the claim "none logged" is not
-//                      made ("not enough data", law 3, D-73) and the lead keeps its send status.
+//                      about this lead, HubSpot logs the lead's replies for this account (logging_mode
+//                      log_all with the email scope), and HubSpot was read in full (every logged email)
+//                      after the owner email before that one: the check that let the last email go
+//                      out, or a later one. Without such a check nobody looked, and without reply
+//                      logging nothing could be seen, so the claim "none logged" is not made ("not
+//                      enough data", law 3, D-37, D-73, D-77) and the lead keeps its send status.
 //   6. send_confirmed  send_confirmed_at is set (an EMAIL logged in HubSpot)
 //   7. send_clicked    first_send_clicked_at is set (a click is never a confirmed send: law 3, D-26)
 //   8. drafted         the owner was emailed the draft (processing_state notified)
@@ -42,6 +44,11 @@ export interface LeadStatusInput {
   readonly signalsCheckedAt: Date | null;
   /** `settings.followups_enabled` now: with follow-ups off, none is coming for this lead. */
   readonly followupsEnabled: boolean;
+  /**
+   * HubSpot logs the lead's replies for this account: `logging_mode` log_all and the email scope
+   * granted (D-37's reply rule). Without it "No reply from lead (none logged)" is never claimed.
+   */
+  readonly repliesLogged: boolean;
 }
 
 /** "No reply" needs this long since the last email to the owner about the lead (D-32). */
@@ -97,7 +104,11 @@ function isNoReply(lead: LeadStatusInput, now: Date): boolean {
   const emails = ownerEmails(lead);
   const last = emails.at(-1);
   return (
-    last !== undefined && followUpsFinishedOrOff(lead) && now.getTime() - last.getTime() >= NO_REPLY_AFTER_MS && repliesChecked(lead, emails)
+    lead.repliesLogged &&
+    last !== undefined &&
+    followUpsFinishedOrOff(lead) &&
+    now.getTime() - last.getTime() >= NO_REPLY_AFTER_MS &&
+    repliesChecked(lead, emails)
   );
 }
 

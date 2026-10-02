@@ -7,6 +7,7 @@ import { registerFollowUpJob } from '@/server/services/followups/job';
 import { registerInboxCheck } from '@/server/services/inbox-check/job';
 import { registerLeadProcessJob } from '@/server/services/leads/process';
 import { registerOnboardingNotifications } from '@/server/services/onboarding/notifications';
+import { registerWeeklyReportJob } from '@/server/services/reports/job';
 import type { Sleep } from '@/server/services/hubspot';
 import { createNotificationRegistry, defaultNotificationRegistry, type NotificationRegistry } from '@/server/services/notifications/renderers';
 import { registerIntakeJobs } from './handlers/intake';
@@ -48,7 +49,8 @@ export type Registration = (registries: Registries) => void;
  * inbox_check + the inbox_test resumer, baseline. M4: lead_process drafts and emails the lead, and
  * registerLeadProcessJob also registers the lead email resumers (new_lead, needs_touch, follow_up,
  * reply_detected); the lead_cap resumer (services/drafting). M5: followup + its failure path (a
- * lead-page note) through registerFollowUpJob (services/followups).
+ * lead-page note) through registerFollowUpJob (services/followups). M6: weekly_report + its failure path
+ * (`weekly_reports.status = 'failed'`), the weekly_report resumer and its failure hook (services/reports).
  */
 const REGISTRATIONS: readonly Registration[] = [
   registerIntakeJobs,
@@ -60,6 +62,7 @@ const REGISTRATIONS: readonly Registration[] = [
   registerBaselineJobs,
   registerDraftingNotifications,
   registerFollowUpJob,
+  registerWeeklyReportJob,
 ];
 
 /** Fresh registries holding every registration (the simulation's; the app uses the defaults below). */

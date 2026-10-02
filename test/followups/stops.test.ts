@@ -473,6 +473,8 @@ describe('followup job: a stream that ends without its email (D-66 open point (2
         sendConfirmedAt: row.send_confirmed_at,
         signalsCheckedAt: row.signals_checked_at,
         followupsEnabled: row.followups_enabled,
+        // The follow-up rig's account logs everything (log_all) with the email scope.
+        repliesLogged: true,
       },
       rig.clock.now(),
     );

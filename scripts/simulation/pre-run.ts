@@ -528,6 +528,8 @@ export async function runPreRun(sim: Simulation): Promise<void> {
     briefJobId: null,
     foregroundEnds: [],
   };
+  // Later stages open the dashboard in the same browser (stage 6).
+  sim.scenario.ownerJar = state.ownerJar;
   const { travel } = sim;
   const step = (local: string, name: string, run: () => Promise<void>): void => {
     travel.at(sim.local(`2026-10-06T${local}`), name, async () => {

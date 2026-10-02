@@ -5,7 +5,7 @@ Autopilot drafts replies and follow-ups for new HubSpot form leads; the owner se
 ## Where things are written down
 - `docs/BUILD_BRIEF.md`: the original spec. The product laws below always apply.
 - `docs/PLAN.md`: the approved plan (schema §5, routes §7, jobs §8, flows §9, security §10, tests §12, simulation §13, env §14, milestones §15). Build exactly what it says. If PLAN and DECISIONS disagree, PLAN wins; record the discrepancy.
-- `docs/DECISIONS.md`: D-01…D-73, the detailed rules behind the plan (D-53 records the M1 review fixes, D-54 the M2 build choices, D-55 the M2 review fixes, D-56…D-60 the M3 build choices, D-61 the M3 integration, D-62 the M3 review fixes, D-63…D-66 the M4 build choices, D-67 the M4 integration, D-68 the M4 review fixes, D-69…D-71 the M5 build choices, D-72 the M5 integration, D-73 the M5 review fixes).
+- `docs/DECISIONS.md`: D-01…D-77, the detailed rules behind the plan (D-53 records the M1 review fixes, D-54 the M2 build choices, D-55 the M2 review fixes, D-56…D-60 the M3 build choices, D-61 the M3 integration, D-62 the M3 review fixes, D-63…D-66 the M4 build choices, D-67 the M4 integration, D-68 the M4 review fixes, D-69…D-71 the M5 build choices, D-72 the M5 integration, D-73 the M5 review fixes, D-74…D-75 the M6 build choices, D-76 the M6 integration, D-77 the M6 review fixes).
 - `docs/RESEARCH.md` + `docs/research/*.md`: verified vendor facts and test vectors. Finding IDs in [brackets] point here.
 - `docs/ARCHITECTURE.md`: layers, data flow, where each concern lives.
 - `docs/WIRE_UP.md` (M8): connecting the real services.

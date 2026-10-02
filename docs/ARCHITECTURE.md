@@ -58,8 +58,13 @@ Follow-up (day 2, day 5, shifted out of quiet hours):
         → lead replied? markReplied + reply_detected email, remaining follow-ups cancelled
         → otherwise draft follow-up → validator → reserveAndSend(follow_up)
    ▼
-Report: hourly due-check → weekly_report job at Monday 08:00 local
-        → computeWeeklyMetrics (cohort and event counts, honesty rules) → reserveAndSend(weekly_report)
+Report: hourly due-check → weekly_reports row + weekly_report job from Monday 08:00 local (run 15 min later for late intake, then staggered; D-77)
+        → refresh the week's signals (applySignals 'refresh') → computeWeeklyMetrics (cohort and
+          event counts, honesty rules) → store the metrics → reserveAndSend(weekly_report)
+   ▼
+Dashboard: /dashboard, /dashboard/leads/[id], /dashboard/brief read views/dashboard on the
+        OwnerScope (one status per lead, D-32); the lead page refreshes the lead's signals on view
+        (at most every 5 min) and posts its controls as Server Actions to services/owner-controls
 ```
 
 Before any of this, install and onboarding (PLAN §9.1, §9.7) create the account, bind the owner by magic link, build the business brief from the website, select forms, save preferences, run the inbox-logging check and compute the baseline:

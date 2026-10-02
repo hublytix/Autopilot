@@ -6,7 +6,9 @@
 //   install → fake consent (Approve) → OAuth callback (branch a) → /onboarding/email → magic link
 //   (read from fake.dev_outbox) → GET + POST /auth/confirm in a FRESH cookie jar → onboarding pages
 //   (brief, forms, preferences, inbox, baseline) → the inbox test email's edit and dismiss links (M4:
-//   GET + POST each, no JavaScript) → Finish → /dashboard (the M3 placeholder until M6).
+//   GET + POST each, no JavaScript) → Finish → /dashboard (M6: the status card, Pause all and Resume
+//   as Server Actions without JavaScript) → /dashboard/brief → the inbox check's test lead's page
+//   (viewable, marked as the test lead, never listed) and 404s for an unknown or malformed lead id.
 //
 // The app's PGlite is single-process, so the magic link is read with the server stopped and the
 // server is started again on the same FAKE_DB_DIR: the link still works after the restart only
@@ -127,6 +129,17 @@ async function readInboxTestLinks(dataDir: string): Promise<{ edit: string; dism
     const edit = row === null ? null : /\/a\/(apt_[A-Za-z0-9_-]{43})\/edit"/.exec(row.html)?.[1];
     const dismiss = row === null ? null : /\/a\/(apt_[A-Za-z0-9_-]{43})\/dismiss"/.exec(row.html)?.[1];
     return edit === undefined || edit === null || dismiss === undefined || dismiss === null ? null : { edit, dismiss };
+  } finally {
+    await db.close();
+  }
+}
+
+/** The inbox check's test lead (the only lead before Day 0) in fake.dev's PGlite (server stopped). */
+async function readTestLeadId(dataDir: string): Promise<string | null> {
+  const db = createPgliteDb({ dataDir });
+  try {
+    const row = await db.maybeOne<{ id: string }>(`select id from public.leads where is_test order by received_at desc limit 1`);
+    return row?.id ?? null;
   } finally {
     await db.close();
   }
@@ -289,6 +302,8 @@ async function run(dataDir: string): Promise<void> {
     await stopServer(server);
     const links = await readInboxTestLinks(dataDir);
     check('inbox_test email has edit and dismiss links', links !== null, links === null ? 'none' : 'found');
+    const testLeadId = await readTestLeadId(dataDir);
+    check('the inbox check created its test lead', testLeadId !== null, testLeadId === null ? 'none' : 'found');
     server = startServer(port, env);
     await waitUntilReady(baseUrl, server);
     if (links !== null) {
@@ -342,11 +357,83 @@ async function run(dataDir: string): Promise<void> {
     check('Finish → /dashboard', finished?.status === 303 && locationPath(finished, baseUrl) === '/dashboard', `${finished?.status ?? 'no form'} → ${finished === null ? 'none' : (locationPath(finished, baseUrl) ?? 'page')}`);
     const status = await waitFor(owner, 'onboarding complete', (s) => (s.gate as { completed?: boolean } | undefined)?.completed === true, 5);
     check('onboarding complete', (status?.gate as { completed?: boolean } | undefined)?.completed === true, JSON.stringify(status?.gate ?? null));
+    // M6: the dashboard. Active, no leads yet (the test lead is never listed), every script nonce'd.
     const dashboard = await owner.page('/dashboard');
+    const dashboardNonce = scriptsNonced(dashboard.response, dashboard.$);
+    const state = (page: { $: CheerioAPI }): string => page.$('[data-testid="status-card"]').attr('data-state') ?? 'none';
     check(
-      '/dashboard placeholder: setup complete (M6 builds the dashboard)',
-      dashboard.response.status === 200 && isPrivate(dashboard.response) && dashboard.html.includes('Setup is complete'),
-      `${dashboard.response.status}, private ${isPrivate(dashboard.response)}`,
+      '/dashboard: status active, setup complete, no leads listed',
+      dashboard.response.status === 200 &&
+        isPrivate(dashboard.response) &&
+        dashboardNonce.ok &&
+        state(dashboard) === 'active' &&
+        dashboard.html.includes('Setup is complete') &&
+        dashboard.$('ul[aria-label="Recent leads"] li').length === 0,
+      `${dashboard.response.status}, private ${isPrivate(dashboard.response)}, state ${state(dashboard)}, ${dashboardNonce.detail}`,
+    );
+
+    // The reconnect sign-in link's landing (M3's promise): the Reconnect HubSpot link whatever the state.
+    const reconnect = await owner.page('/dashboard?reconnect=1');
+    check(
+      '/dashboard?reconnect=1 offers Reconnect HubSpot',
+      reconnect.response.status === 200 && reconnect.$('a[href="/api/hubspot/install"]:contains("Reconnect HubSpot")').length === 1,
+      `${reconnect.response.status}`,
+    );
+
+    // Pause all and Resume: Server Actions posted without JavaScript, post/redirect/get.
+    const paused = await owner.submit(dashboard.$, '/dashboard', 'button:contains("Pause all")');
+    await paused.body?.cancel();
+    const pausedPage = await owner.page(locationPath(paused, baseUrl) ?? '/dashboard');
+    check(
+      'Pause all (Server Action, no JavaScript) → paused',
+      paused.status === 303 && locationPath(paused, baseUrl) === '/dashboard?result=paused' && state(pausedPage) === 'paused' && pausedPage.$('button:contains("Resume")').length === 1,
+      `${paused.status} → ${locationPath(paused, baseUrl) ?? 'none'}, state ${state(pausedPage)}`,
+    );
+    const resumed = await owner.submit(pausedPage.$, '/dashboard', 'button:contains("Resume")');
+    await resumed.body?.cancel();
+    const resumedPage = await owner.page(locationPath(resumed, baseUrl) ?? '/dashboard');
+    check(
+      'Resume (Server Action) → active, with the paused-window banner',
+      resumed.status === 303 && locationPath(resumed, baseUrl) === '/dashboard?result=resumed' && state(resumedPage) === 'active' && resumedPage.html.includes('were not drafted'),
+      `${resumed.status} → ${locationPath(resumed, baseUrl) ?? 'none'}, state ${state(resumedPage)}`,
+    );
+
+    const briefEditor = await owner.page('/dashboard/brief');
+    const briefNonce = scriptsNonced(briefEditor.response, briefEditor.$);
+    check(
+      '/dashboard/brief: the brief editor',
+      briefEditor.response.status === 200 && isPrivate(briefEditor.response) && briefNonce.ok && briefEditor.$('input[name="company_name"]').length === 1,
+      `${briefEditor.response.status}, private ${isPrivate(briefEditor.response)}, ${briefNonce.detail}`,
+    );
+
+    // A lead page: the inbox check's test lead (viewable with a note; no HubSpot refresh for it).
+    if (testLeadId !== null) {
+      const leadPage = await owner.page(`/dashboard/leads/${testLeadId}`);
+      const leadNonce = scriptsNonced(leadPage.response, leadPage.$);
+      check(
+        '/dashboard/leads/{test lead}: viewable, marked as the test lead',
+        leadPage.response.status === 200 &&
+          isPrivate(leadPage.response) &&
+          leadNonce.ok &&
+          leadPage.html.includes('This is the test lead from your inbox check') &&
+          leadPage.$('[data-testid="timeline"]').length === 1 &&
+          !leadPage.html.includes('Resume follow-ups'),
+        `${leadPage.response.status}, private ${isPrivate(leadPage.response)}, ${leadNonce.detail}`,
+      );
+    }
+    const unknownLead = await owner.page('/dashboard/leads/00000000-0000-4000-8000-000000000000');
+    const malformedLead = await owner.page('/dashboard/leads/not-a-lead');
+    check(
+      '/dashboard/leads/{unknown or malformed id} → 404',
+      unknownLead.response.status === 404 && malformedLead.response.status === 404 && isPrivate(unknownLead.response),
+      `${unknownLead.response.status}, ${malformedLead.response.status}`,
+    );
+    const anonymousLead = await anonymous.request(`/dashboard/leads/${testLeadId ?? '00000000-0000-4000-8000-000000000000'}`);
+    await anonymousLead.body?.cancel();
+    check(
+      'no session → /dashboard pages redirect to /login',
+      anonymousLead.status === 303 && locationPath(anonymousLead, baseUrl) === '/login',
+      `${anonymousLead.status} → ${locationPath(anonymousLead, baseUrl) ?? 'none'}`,
     );
     const baselineDone = await waitFor(owner, 'the baseline job', (s) => (s.baseline as { state?: string } | undefined)?.state === 'done');
     check('baseline job done (dev ticker)', (baselineDone?.baseline as { state?: string } | undefined)?.state === 'done', JSON.stringify(baselineDone?.baseline ?? null));

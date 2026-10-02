@@ -40,7 +40,6 @@ describe('file layout', () => {
     'src/app/onboarding/preferences/page.tsx',
     'src/app/onboarding/inbox/page.tsx',
     'src/app/onboarding/baseline/page.tsx',
-    // The /dashboard placeholder Finish lands on until M6 builds the dashboard.
     'src/app/dashboard/page.tsx',
     'src/app/api/onboarding/status/route.ts',
     'src/app/a/[token]/send/route.ts',
@@ -49,6 +48,11 @@ describe('file layout', () => {
     'src/app/a/[token]/verify-notify/page.tsx',
     'src/app/a/[token]/edit/page.tsx',
     'src/app/a/[token]/dismiss/page.tsx',
+    // M6 (PLAN §7.3, §7.5): the Monday report's due-check and the dashboard pages.
+    'src/app/api/cron/weekly-report/route.ts',
+    'src/app/dashboard/layout.tsx',
+    'src/app/dashboard/leads/[id]/page.tsx',
+    'src/app/dashboard/brief/page.tsx',
     'src/server/security/ssrf.ts',
     'src/server/security/csp.ts',
     'src/server/security/same-origin.ts',
@@ -78,7 +82,7 @@ describe('file layout', () => {
   });
 
   // PLAN §8.1: the three periodic triggers (UTC), declared for Vercel Pro. The poll route arrived in
-  // M2 (listed above); the weekly report (M6) and daily (M7) routes join the list when they land.
+  // M2 and the weekly report route in M6 (listed above); the daily route (M7) joins the list when it lands.
   it('vercel.json declares exactly the PLAN §8.1 cron schedules', () => {
     const config = JSON.parse(readFileSync(path.join(root, 'vercel.json'), 'utf8')) as { crons?: unknown };
     expect(config.crons).toEqual([

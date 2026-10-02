@@ -37,6 +37,7 @@ function lead(overrides: Partial<LeadStatusInput> = {}): LeadStatusInput {
     sendConfirmedAt: null,
     signalsCheckedAt: null,
     followupsEnabled: true,
+    repliesLogged: true,
     ...overrides,
   };
 }
@@ -195,6 +196,17 @@ describe('deriveLeadStatus "no reply" (D-32 rule 5)', () => {
     // A later complete read (the lead page's refresh) makes the claim true.
     expect(deriveLeadStatus({ ...paused, signalsCheckedAt: ago(DAY) }, NOW)).toBe('no_reply');
     expect(deriveLeadStatus({ ...blind, signalsCheckedAt: ago(DAY) }, NOW)).toBe('no_reply');
+  });
+
+  it('never claims "none logged" for an account whose HubSpot does not log the leads\' replies (D-37, D-77)', () => {
+    // logging_mode none / sends_only / unknown, or the email scope missing: a complete read sees no reply because none is logged.
+    const finished = { ...notified, fu1NotifiedAt: ago(8 * DAY), fu2NotifiedAt: ago(5 * DAY), signalsCheckedAt: ago(5 * DAY + HOUR) };
+    expect(deriveLeadStatus(finished, NOW)).toBe('no_reply');
+    expect(deriveLeadStatus({ ...finished, repliesLogged: false }, NOW)).toBe('send_confirmed');
+    expect(deriveLeadStatus({ ...finished, sendConfirmedAt: null, firstSendClickedAt: ago(9 * DAY), repliesLogged: false }, NOW)).toBe('send_clicked');
+    expect(deriveLeadStatus({ ...finished, sendConfirmedAt: null, repliesLogged: false }, NOW)).toBe('drafted');
+    // A reply HubSpot did log (the fallback property) is still shown.
+    expect(deriveLeadStatus({ ...finished, repliesLogged: false, repliedAt: ago(DAY) }, NOW)).toBe('replied');
   });
 
   it('never applies while a follow-up is still coming', () => {

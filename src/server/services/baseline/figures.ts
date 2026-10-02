@@ -1,4 +1,5 @@
 import 'server-only';
+import { wholePercent } from '@/server/domain/weekly-metrics';
 
 // The baseline's figures (D-38, PLAN §9.7), pure. Over the leads (submissions classified `lead` or
 // `unclear`) of the last 30 days:
@@ -37,7 +38,10 @@ export function baselineFigures(waits: readonly (number | null)[]): BaselineFigu
   };
 }
 
-/** The share of leads without a logged outbound email, as a whole percent; null without leads. */
+/**
+ * The share of leads without a logged outbound email, as a whole percent; null without leads. The
+ * Monday report's rounding (never 0% while one lead is without, never 100% while one has one, D-77).
+ */
 export function percentWithout(withoutOutboundCount: number, leadsCounted: number): number | null {
-  return leadsCounted <= 0 ? null : Math.round((withoutOutboundCount / leadsCounted) * 100);
+  return wholePercent(withoutOutboundCount, leadsCounted);
 }

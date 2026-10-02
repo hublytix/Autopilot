@@ -67,12 +67,17 @@ interface LeadRow {
   is_test: boolean;
 }
 
-export async function runDay0(sim: Simulation): Promise<void> {
-  const emailsBefore = sim.fakes.mailer.sent.length;
-  const aiCallsBefore = (await sim.db.one<{ n: number }>('select count(*)::int as n from public.ai_calls')).n;
+/** Schedules Day 0's six submissions (and their webhooks) at their PLAN §13 times; the daily-cap variant reuses it. */
+export function scheduleDay0Submissions(sim: Simulation): void {
   for (const submission of DAY0_SUBMISSIONS) {
     sim.travel.at(sim.local(submission.at), `submission #${submission.n}`, () => submit(sim, submission));
   }
+}
+
+export async function runDay0(sim: Simulation): Promise<void> {
+  const emailsBefore = sim.fakes.mailer.sent.length;
+  const aiCallsBefore = (await sim.db.one<{ n: number }>('select count(*)::int as n from public.ai_calls')).n;
+  scheduleDay0Submissions(sim);
   scheduleDay0OwnerActions(sim);
   await sim.travel.advanceTo(sim.local(DAY0_END));
 

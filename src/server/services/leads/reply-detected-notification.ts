@@ -15,14 +15,19 @@ import { hubspotContactRecordUrl } from './record-link';
 // registered resumer. Predicates (§8.4): replied_at set, lead not dismissed, account and connection
 // active. No buttons (nothing to send), no lead content beyond the safe first name: the email links
 // to the contact's record in HubSpot, where the owner reads the reply. The reply time is HubSpot's
-// (`replied_at`), shown in the account's timezone. No "resume follow-ups" line yet: no page offers it
-// before M6's lead page, which passes `resumeFollowUpsUrl` (law 5, D-68 open point, D-73).
+// (`replied_at`), shown in the account's timezone. The "resume follow-ups" line links to the lead's
+// dashboard page, which offers "Resume follow-ups" (M6; law 5, D-68 open point, D-73).
 
 /** "Tue 6 Oct, 10:15" in `zone` (UTC when unknown or invalid). */
 export function formatReplyTime(at: Date, zone: string | null): string {
   const zoned = DateTime.fromJSDate(at, { zone: zone ?? 'UTC' });
   const local = zoned.isValid ? zoned : DateTime.fromJSDate(at, { zone: 'UTC' });
   return local.setLocale('en-GB').toFormat('ccc d LLL, HH:mm');
+}
+
+/** The lead's dashboard page (PLAN §7.5): its timeline and controls, "Resume follow-ups" included. */
+export function leadPagePath(leadId: string): string {
+  return `/dashboard/leads/${leadId}`;
 }
 
 export function replyDetectedKey(leadId: string, followupStream: number): string {
@@ -50,6 +55,7 @@ export async function replyDetectedNotificationPlan(
           firstName,
           repliedAtText: source.repliedAt === null ? null : formatReplyTime(source.repliedAt, source.timezone),
           hubspotRecordUrl: hubspotContactRecordUrl(source.uiDomain, source.portalId, source.hubspotContactId),
+          resumeFollowUpsUrl: `${env.APP_URL}${leadPagePath(source.leadId)}`,
         }),
       );
       return {
