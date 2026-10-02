@@ -20,3 +20,5 @@ export { currentStepIndex, Steps } from './Steps';
 export type { Step, StepsProps } from './Steps';
 export { SubmitButton } from './SubmitButton';
 export type { SubmitButtonProps } from './SubmitButton';
+export { Textarea } from './Textarea';
+export type { TextareaProps } from './Textarea';

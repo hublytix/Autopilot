@@ -47,7 +47,7 @@ export default async function OnboardingFormsPage({ searchParams }: { searchPara
   return (
     <Page
       title="Which forms bring you leads?"
-      description="We draft a reply for each new enquiry on the forms you tick (spam and sales pitches are filtered out). Submissions made before you tick a form are never drafted."
+      description="We draft your reply to each new enquiry on the forms you tick (spam and sales pitches are filtered out). Submissions made before you tick a form are never drafted."
     >
       {error === undefined ? null : <Alert tone="error">{error}</Alert>}
       {view.forms.length === 0 ? (

@@ -145,8 +145,8 @@ describe('simulation stage 1 (M1)', () => {
   });
 });
 
-describe('simulation stages 2 and 3 (M2, M3): the real pre-run + Day 0 intake', () => {
-  it('passes every check: 6 leads, #3 and #4 filtered, #5 found by the 10:35 cron poll, no historical lead, only the 2 pre-run emails', async () => {
+describe('simulation stages 2–4 (M2–M4): the real pre-run, Day 0 intake, drafts, new_lead emails and action links', () => {
+  it('passes every check: 6 leads, #3 and #4 filtered, #5 found by the 10:35 cron poll, no historical lead, the 2 pre-run emails then new_lead ×4', async () => {
     const summary = await run(null);
     expect(summary.checks.filter((check) => !check.ok)).toEqual([]);
     expect(summary.ok).toBe(true);
@@ -154,21 +154,38 @@ describe('simulation stages 2 and 3 (M2, M3): the real pre-run + Day 0 intake', 
       ['boot', 'M1'],
       ['pre-run', 'M3'],
       ['day-0', 'M2'],
+      ['day-0-emails', 'M4'],
       ['test-lead', 'M3'],
     ]);
     expect(summary.leads.map((lead) => [lead.ref, lead.classification, lead.processingState, lead.intakeTrigger, lead.isTest])).toEqual([
-      ['L1', 'lead', 'processing', 'webhook', false],
-      ['L2', 'unclear', 'processing', 'webhook', false],
+      ['L1', 'lead', 'notified', 'webhook', false],
+      ['L2', 'unclear', 'notified', 'webhook', false],
       ['L3', 'spam', 'filtered', 'webhook', false],
       ['L4', 'vendor_pitch', 'filtered', 'webhook', false],
-      ['L5', 'lead', 'processing', 'cron', false],
-      ['L6', 'lead', 'processing', 'webhook', false],
+      ['L5', 'lead', 'notified', 'cron', false],
+      ['L6', 'lead', 'notified', 'webhook', false],
     ]);
     expect(summary.emails.map((email) => [email.seq, email.at, email.kind, email.lead, email.to, email.file])).toEqual([
       [1, '2026-10-06T13:00:00.000Z', 'magic_link', null, ['owner@brightside-plumbing.example'], '001-magic_link'],
       [2, '2026-10-06T13:03:15.000Z', 'inbox_test', null, ['owner@brightside-plumbing.example'], '002-inbox_test'],
+      // Day 0: each drafted lead's email as soon as lead_process finishes (#5 after the 10:35 cron poll).
+      [3, '2026-10-06T14:00:00.000Z', 'new_lead', 'L1', ['owner@brightside-plumbing.example'], '003-new_lead-L1'],
+      [4, '2026-10-06T14:05:00.000Z', 'new_lead', 'L2', ['owner@brightside-plumbing.example'], '004-new_lead-L2'],
+      [5, '2026-10-06T14:20:00.000Z', 'new_lead', 'L6', ['owner@brightside-plumbing.example'], '005-new_lead-L6'],
+      [6, '2026-10-06T14:35:00.000Z', 'new_lead', 'L5', ['owner@brightside-plumbing.example'], '006-new_lead-L5'],
     ]);
-    expect(summary.clock).toEqual({ start: '2026-10-06T13:00:00.000Z', end: '2026-10-06T14:41:00.000Z' });
+    expect(summary.emails.slice(2).map((email) => email.subject)).toEqual([
+      'New lead: Jordan — your reply is ready',
+      'New lead: Alex — your reply is ready',
+      'New lead: Riley — your reply is ready',
+      'New lead: Lena — your reply is ready',
+    ]);
+    // Every email is in the outbox directory as NNN-<kind>[-<lead ref>].html and .txt.
+    expect((await readdir(outboxDir)).sort()).toEqual([
+      ...summary.emails.flatMap((email) => [`${email.file}.html`, `${email.file}.txt`]),
+      'summary.json',
+    ]);
+    expect(summary.clock).toEqual({ start: '2026-10-06T13:00:00.000Z', end: '2026-10-06T14:45:00.000Z' });
     // No database id (account, lead, job, user) anywhere; the fixture's form ids are UUID-shaped but fixed.
     expect(JSON.stringify(summary).replaceAll(/b1f0c6a2-3d4e-4f50-8a61-7b2c9d0e1f0[1-3]/g, 'form')).not.toMatch(UUID);
   });
@@ -223,7 +240,7 @@ describe('simulation stages 2 and 3 (M2, M3): the real pre-run + Day 0 intake', 
 
     const polls = summary.timeline.filter((entry) => entry.name === 'cron.poll').map((entry) => entry.local.slice(15, 20));
     expect(polls).toEqual(['09:00', '09:05', '09:10', '09:15', '09:20', '09:25', '09:30', '09:35', '09:40', '09:45', '09:50', '09:55',
-      '10:00', '10:05', '10:10', '10:15', '10:20', '10:25', '10:30', '10:35', '10:40']);
+      '10:00', '10:05', '10:10', '10:15', '10:20', '10:25', '10:30', '10:35', '10:40', '10:45']);
     expect(summary.timeline.filter((entry) => entry.name === 'cron.weekly_report').map((entry) => entry.local.slice(15, 20))).toEqual(['09:00', '10:00']);
 
     const intake = summary.timeline.filter((entry) => entry.name === 'lead.created').map((entry) => [entry.local.slice(15, 20), entry.detail?.lead, entry.detail?.trigger]);
@@ -247,6 +264,45 @@ describe('simulation stages 2 and 3 (M2, M3): the real pre-run + Day 0 intake', 
       'cron.weekly_report',
     ]);
     expect(summary.timeline.filter((entry) => entry.name === 'webhook.object_creation')).toHaveLength(5);
+  });
+
+  it('runs the Day 0 owner steps at the PLAN §13 times: three Send taps (clicks), an edit, a dismiss page, every link resolving', async () => {
+    const summary = await run(null);
+    const owner = summary.timeline.filter(
+      (entry) => (entry.stage === 'day-0' || entry.stage === 'day-0-emails') && entry.kind === 'step' && entry.name !== 'portal.form_submitted',
+    );
+    expect(owner.map((entry) => [entry.local.slice(15), entry.name, entry.detail?.lead ?? null])).toEqual([
+      ['10:12:00', 'new_lead.send_tapped', 'L1'],
+      ['10:13:00', 'new_lead.reply_sent_by_owner', 'L1'],
+      ['10:30:00', 'new_lead.send_tapped', 'L2'],
+      ['10:40:00', 'new_lead.send_tapped', 'L6'],
+      ['10:41:00', 'new_lead.reply_sent_by_owner', 'L6'],
+      ['10:42:00', 'new_lead.edited_by_owner', 'L1'],
+      ['10:43:00', 'new_lead.dismiss_page_opened', 'L1'],
+      ['10:43:00', 'inbox_test.dismissed_by_owner', null],
+      ['10:44:00', 'new_lead.links_probed', null],
+    ]);
+    expect(owner.filter((entry) => entry.name === 'new_lead.send_tapped').every((entry) => entry.detail?.composeHost === 'mail.google.com')).toBe(true);
+    const day0 = summary.checks.filter((check) => check.stage === 'day-0-emails');
+    expect(day0.every((check) => check.ok)).toBe(true);
+    expect(day0.map((check) => check.id)).toEqual(
+      expect.arrayContaining([
+        'day0.outbox_is_the_2_pre_run_emails_then_4_new_lead',
+        'day0.L1.send_click_recorded_at_the_tap',
+        'day0.L2.send_click_recorded_at_the_tap',
+        'day0.L6.send_click_recorded_at_the_tap',
+        'day0.L5.no_click_recorded',
+        'day0.L1.edited_text_neither_stored_nor_logged',
+        'day0.L1.dismiss_page_asks_and_changes_nothing',
+        'day0.L5.two_follow_ups_thu_and_sun_at_the_email_time',
+        'day0.statuses_at_1045',
+      ]),
+    );
+    expect(day0.find((check) => check.id === 'day0.statuses_at_1045')?.detail).toBe(
+      'L1 send_clicked, L2 send_clicked, L3 filtered, L4 filtered, L6 send_clicked, L5 drafted',
+    );
+    // No lead is dismissed; the onboarding test lead (dismissed from its own email) is in no list.
+    expect(summary.leads.map((lead) => lead.stopReason)).toEqual([null, null, null, null, null, null]);
   });
 
   it('produces the same summary with the system time set to 2030 (it never reads the wall clock)', async () => {

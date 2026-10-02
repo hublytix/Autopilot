@@ -52,7 +52,7 @@ beforeEach(() => {
 describe('/onboarding/inbox', () => {
   it('explains why in one sentence and offers the test and Skip before anything ran', async () => {
     const html = await render(BASE);
-    expect(html).toContain('can only see replies that HubSpot logs, so let&#x27;s check your email is logged.');
+    expect(html).toContain('can only see replies from leads that HubSpot logs, so let&#x27;s check your email is logged.');
     expect(html).toContain('We count these when you start the test.');
     expect(html).toContain('<label for="test_address"');
     expect(html).toContain('Start the test');

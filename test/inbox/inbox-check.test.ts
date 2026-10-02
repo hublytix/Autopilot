@@ -91,7 +91,7 @@ describe('history counts', () => {
 });
 
 describe('live test', () => {
-  it('sends the inbox_test email (send button + mail-app link only until M4) to the owner, sets the deadlines and inserts the first job', async () => {
+  it('sends the inbox_test email (send, edit and dismiss buttons + mail-app link) to the owner, sets the deadlines and inserts the first job', async () => {
     rig = await createInboxRig(getDb());
     const t0 = rig.clock.now();
     const result = await start(rig);
@@ -106,11 +106,11 @@ describe('live test', () => {
     expect(mail?.text).toContain(TEST_ADDRESS);
     expect(mail?.html).toMatch(/\/a\/apt_[A-Za-z0-9_-]{43}\/send"/);
     expect(mail?.html).toMatch(/\/a\/apt_[A-Za-z0-9_-]{43}\/send\?via=mailto"/);
-    // /a/{t}/edit and /dismiss are M4: no button may lead to a page that does not exist (law 5).
-    expect(mail?.html).not.toMatch(/\/(edit|dismiss)"/);
-    expect(mail?.text).not.toContain('Edit first');
-    expect(mail?.text).not.toContain('Not a real lead');
-    expect(mail?.text).not.toContain('work like the ones on real lead emails');
+    expect(mail?.html).toMatch(/\/a\/apt_[A-Za-z0-9_-]{43}\/edit"/);
+    expect(mail?.html).toMatch(/\/a\/apt_[A-Za-z0-9_-]{43}\/dismiss"/);
+    expect(mail?.text).toContain('Edit first');
+    expect(mail?.text).toContain('Not a real lead');
+    expect(mail?.text).toContain('work like the ones on real lead emails');
 
     const check = await checkOf(getDb(), checkId);
     expect(check.status).toBe('open');
@@ -120,7 +120,7 @@ describe('live test', () => {
     expect(check.reply_deadline_at).toEqual(at(t0, 20 * MINUTE));
 
     const tokens = await getDb().query<{ purpose: string }>(`select purpose from action_tokens where lead_id = $1 order by purpose`, [check.test_lead_id]);
-    expect(tokens.map((t) => t.purpose)).toEqual(['send']);
+    expect(tokens.map((t) => t.purpose)).toEqual(['dismiss', 'edit', 'send']);
     expect(await inboxJobs(getDb())).toEqual([
       { dedupe_key: `inbox:${rig.accountId}:${checkId}:1`, status: 'scheduled', seq: 1, run_at: at(t0, MINUTE) },
     ]);

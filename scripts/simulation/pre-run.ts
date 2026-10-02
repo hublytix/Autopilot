@@ -31,6 +31,7 @@ import { latestInboxCheck, startInboxCheck } from '@/server/services/inbox-check
 import { completeOnboarding, saveFormSelection, savePreferences } from '@/server/services/onboarding';
 import { PENDING_INSTALL_COOKIE_NAME, STATE_COOKIE_NAME } from '@/server/services/install/cookies';
 import { baselinePageView, briefPageView, formsPageView, onboardingStatus, preferencesPageView } from '@/server/views/onboarding';
+import { DESKTOP_UA, emailActionLinks, OWNER_IP } from './owner-browser';
 import type { Simulation } from './types';
 
 export const PRE_RUN_START = '2026-10-06T09:00:00';
@@ -40,10 +41,6 @@ export const PRE_RUN_FINISH = '2026-10-06T09:04:30';
 export const PRE_RUN_END = '2026-10-06T09:06:00';
 const FOREGROUND_LIMIT_MS = 5 * 60_000;
 
-/** The installing browser's address (only its HMAC is stored, for rate limits). */
-const OWNER_IP = '198.51.100.7';
-/** A desktop browser: "Send from my email" with Gmail opens the web compose window (302). */
-const DESKTOP_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
 /** The fixture portal's HubSpot BCC address (Settings → Objects → Activities → Email logging). */
 const BCC_LOCAL_PART_SUFFIX = '@bcc.hubspot.com';
 
@@ -363,16 +360,10 @@ async function startInboxTest(sim: Simulation, state: PreRunState): Promise<void
   endForeground(sim, state);
 }
 
-/** The test email's "Send from my email" link (`/a/{token}/send`, not the `?via=mailto` one). */
-function sendLinkToken(text: string): string | null {
-  const match = /\/a\/(apt_[A-Za-z0-9_-]+)\/send(?![?\w])/.exec(text);
-  return match?.[1] ?? null;
-}
-
 async function sendTestReply(sim: Simulation, state: PreRunState): Promise<void> {
   const { deps } = sim;
   const mail = sim.fakes.mailer.sent.find((sent) => sent.kind === 'inbox_test');
-  const token = mail === undefined ? null : sendLinkToken(mail.text);
+  const token = mail === undefined ? null : emailActionLinks(mail.text).send;
   const testAddress = sim.fakes.hubspot.testAddress ?? '';
   let status = 0;
   let host: string | null = null;

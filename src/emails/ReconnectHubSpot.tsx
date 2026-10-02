@@ -44,7 +44,7 @@ export function ReconnectHubSpot({ productName, reconnectUrl, purgeDate }: Recon
       </Heading>
       <Text style={paragraph}>
         HubSpot no longer accepts {productName}&apos;s access to your account: the app was uninstalled or its access was
-        revoked. {productName} has stopped checking for new leads and drafting replies.
+        revoked. {productName} has stopped checking for new leads and drafting your replies.
       </Text>
       <Text style={paragraph}>
         If you don&apos;t reconnect, we delete your {productName} data for this HubSpot account {deadline}. Reconnecting

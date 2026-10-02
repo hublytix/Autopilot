@@ -1,7 +1,8 @@
 import 'server-only';
 
 // Owner action links (PLAN §7.4, D-13, D-26, D-45): the token-gated send and copy pages, the page
-// beacon and the click heuristic. M4's edit and dismiss pages build on the same pieces. Import from here.
+// beacon and the click heuristic; M4's edit page (GET + the POST's result) and dismiss page (confirm +
+// POST). Import from here.
 export { BEACON_NONCE_PATTERN, BEACON_TTL_MS, consumeBeacon, issueBeacon } from './beacon';
 export { recordBeacon } from './beacon-click';
 export type { BeaconOutcome, BeaconRequest } from './beacon-click';
@@ -16,3 +17,7 @@ export { actionLinkPath } from './paths';
 export type { ActionLinkAction } from './paths';
 export { composeTarget, resolveSendLink } from './send';
 export type { CopyReason, InterstitialView, SendLinkOutcome, SendLinkRequest } from './send';
+export { EDIT_INPUT_LIMITS, parseEditInput, resolveEditLink, submitEditedReply } from './edit';
+export type { EditedReply, EditInputIssueCode, EditLinkRequest, EditLinkState, EditSubmission, EditSubmitOutcome, EditView } from './edit';
+export { dismissLead, resolveDismissLink } from './dismiss';
+export type { DismissLinkState, DismissOutcome, DismissRequest } from './dismiss';

@@ -245,7 +245,7 @@ describe('aiCallRecord', () => {
     finishedAt: START,
   };
 
-  it('has no cost for an unknown serving model, and recording it alerts the admin and stores 0', async () => {
+  it('costs an unknown serving model at the most expensive known rate (the breaker errs towards tripping) and alerts the admin', async () => {
     const db = getDb();
     const { accountId } = await seed(db);
     const result: LlmResult<ClassifyOutput> = {
@@ -256,10 +256,13 @@ describe('aiCallRecord', () => {
       model: 'claude-haiku-9',
     };
     const record = aiCallRecord({ ...context, accountId }, result);
-    expect(record.costMicroUsd).toBeNull();
+    // Sonnet 5.5's rates (the highest known): 10 × 2000 + 2 × 10000 nano-USD = 40 micro-USD.
+    expect(record).toMatchObject({ costMicroUsd: 40, costEstimated: true });
     await recordAiCall(db, record);
-    expect(alerts).toEqual([{ code: 'ai_price_unknown_model', fields: { model: 'claude-haiku-9', purpose: 'classify' } }]);
-    expect((await aiCalls(db))[0]).toMatchObject({ model: 'claude-haiku-9', cost_micro_usd: 0, input_tokens: 10 });
+    expect(alerts).toEqual([{ code: 'ai_price_unknown_model', fields: { model: 'claude-haiku-9', purpose: 'classify', reason: 'costed_at_highest_known_rate' } }]);
+    expect((await aiCalls(db))[0]).toMatchObject({ model: 'claude-haiku-9', cost_micro_usd: 40, input_tokens: 10 });
+    // A known model is exact and not flagged.
+    expect(aiCallRecord({ ...context, accountId }, { ...result, model: 'claude-haiku-4-5' })).toMatchObject({ costMicroUsd: 20, costEstimated: false });
   });
 
   it('falls back to the requested model when the call failed before the API named one', () => {

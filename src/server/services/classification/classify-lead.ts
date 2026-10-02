@@ -38,8 +38,8 @@ export interface ClassifyLeadResult {
 }
 
 export interface ClassifyLeadOptions {
-  /** The D-36 breaker check; default `isAiDailyBudgetTripped` (M4 hook, never trips yet). */
-  isBudgetTripped?: ((deps: ClassifyDeps) => Promise<boolean>) | undefined;
+  /** The D-36 breaker check (global budget and the account's share); default `isAiDailyBudgetTripped` (services/drafting/budget.ts). */
+  isBudgetTripped?: ((deps: ClassifyDeps, scope: { accountId: string }) => Promise<boolean>) | undefined;
 }
 
 const FALLBACK: ClassifyLeadResult = Object.freeze({ classification: 'unclear', failed: true });
@@ -49,8 +49,9 @@ export async function classifyLead(deps: ClassifyDeps, input: ClassifyLeadInput,
   const fields = { accountId: input.accountId, leadId: input.leadId ?? undefined, purpose };
   const isBudgetTripped = options.isBudgetTripped ?? isAiDailyBudgetTripped;
 
-  if (await isBudgetTripped(deps)) {
-    // No call, so no ai_calls row; lead_process sends needs-touch and alerts (PLAN §9.3 step 4).
+  if (await isBudgetTripped(deps, { accountId: input.accountId })) {
+    // No call, so no ai_calls row; the breaker alerted the admin (once per UTC day) and drafting falls
+    // back to the needs-touch template (PLAN §9.3 step 4).
     log.warn('classification skipped: AI budget breaker tripped', { ...fields, event: 'classify_skipped', reason: 'ai_budget_tripped' });
     return FALLBACK;
   }

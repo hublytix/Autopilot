@@ -5,8 +5,11 @@
 // SIMULATE_SYSTEM_TIME (e.g. 2030) is recorded in the summary. The simulation never reads the wall
 // clock, so the output must be the same whatever the system time is; the Vitest suite proves that
 // by running every stage with the system time faked to 2030 (scripts/simulation/run.test.ts).
-// Stages so far: boot (M1), the real onboarding pre-run (M3), Day 0 intake (M2) and the test-lead
-// exclusions (M3); see scripts/simulation/stages.ts.
+// Stages so far: boot (M1), the real onboarding pre-run (M3), Day 0 intake with the drafted
+// new_lead emails and the owner's "Send from my email" taps (M2 + M4), `day-0-emails` (M4: "Edit
+// first" and "Not a real lead" on the new_lead emails, and every action link of those emails
+// resolving without counting a click), and the test-lead exclusions (M3); see
+// scripts/simulation/stages.ts.
 import path from 'node:path';
 import { runSimulation, SUMMARY_FILE } from './simulation/run';
 

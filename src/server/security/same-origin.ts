@@ -11,8 +11,13 @@ import 'server-only';
 // form post normally carries the real Origin; `null` is still accepted when the browser vouches for
 // the request with `Sec-Fetch-Site: same-origin`. Opaque-origin senders get `cross-site` there.
 export function isSameOriginRequest(req: Request, appUrl: string): boolean {
+  return isSameOriginHeaders(req.headers, appUrl);
+}
+
+/** The same rule on bare request headers (a Server Action reads them through next/headers). */
+export function isSameOriginHeaders(headers: { get(name: string): string | null }, appUrl: string): boolean {
   const expected = new URL(appUrl).origin;
-  const origin = req.headers.get('origin');
+  const origin = headers.get('origin');
   if (origin !== null && origin !== 'null') return origin === expected;
-  return req.headers.get('sec-fetch-site') === 'same-origin';
+  return headers.get('sec-fetch-site') === 'same-origin';
 }

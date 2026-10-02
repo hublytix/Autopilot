@@ -15,8 +15,9 @@ import { checkIdOfInboxTestKey, inboxCheckDedupeKey } from './keys';
 
 // The `inbox_test` email (PLAN §8.4, §9.7 step 2, D-14, D-27): reserved with key
 // `inbox-test:{checkId}`, sent to the owner's login address with Reply-To the owner's own address,
-// the send button and the default-mail-app link (INBOX_TEST_BUTTONS: M4 adds edit and dismiss once
-// those pages exist). Its predicates are PLAN §8.4's (test
+// the send, edit and dismiss buttons and the default-mail-app link, like a real lead email (the
+// /a/{t}/send, /edit and /dismiss pages treat the test lead like any lead; dismissing it only marks
+// the test lead). Its predicates are PLAN §8.4's (test
 // lead, account onboarding or active, connection active) plus "the check is still open with this
 // test lead", so a skipped or superseded check's email is never sent late by the sweeper.
 // When it is sent (in the `sent` transaction): the deadlines are set from the send time (the send
@@ -27,11 +28,8 @@ import { checkIdOfInboxTestKey, inboxCheckDedupeKey } from './keys';
 
 export const ONBOARDING_INBOX_PATH = '/onboarding/inbox';
 
-/**
- * The action tokens the email carries. M4 adds 'edit' and 'dismiss' (and passes their URLs to the
- * template) when /a/{t}/edit and /a/{t}/dismiss exist; until then those links would 404 (law 5).
- */
-export const INBOX_TEST_BUTTONS = ['send'] as const satisfies readonly ('send' | 'edit' | 'dismiss')[];
+/** The action tokens the email carries: one per button, as on a real lead email. */
+export const INBOX_TEST_BUTTONS = ['send', 'edit', 'dismiss'] as const satisfies readonly ('send' | 'edit' | 'dismiss')[];
 
 /** An action link (`/a/{token}/{action}`); the token is base64url, safe in a path. */
 export function actionLinkUrl(appUrl: string, token: string, action: 'send' | 'edit' | 'dismiss'): string {
@@ -116,6 +114,8 @@ export async function inboxTestPlan(deps: Deps, checkId: string): Promise<InboxT
     draftId: source.draftId,
     render: async (tokens): Promise<RenderedMail> => {
       const send = requireToken(tokens, 'send');
+      const edit = requireToken(tokens, 'edit');
+      const dismiss = requireToken(tokens, 'dismiss');
       const { html, text } = await renderEmail(
         createElement(InboxTest, {
           productName: env.PRODUCT_NAME,
@@ -125,6 +125,8 @@ export async function inboxTestPlan(deps: Deps, checkId: string): Promise<InboxT
           draftBody: source.draftBody,
           sendUrl: actionLinkUrl(env.APP_URL, send, 'send'),
           mailtoUrl: `${actionLinkUrl(env.APP_URL, send, 'send')}?via=mailto`,
+          editUrl: actionLinkUrl(env.APP_URL, edit, 'edit'),
+          dismissUrl: actionLinkUrl(env.APP_URL, dismiss, 'dismiss'),
           checkUrl: `${env.APP_URL}${ONBOARDING_INBOX_PATH}`,
         }),
       );

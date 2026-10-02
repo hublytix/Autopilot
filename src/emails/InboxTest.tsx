@@ -3,9 +3,9 @@ import { Button, Heading, Link, Section, Text } from 'react-email';
 import { Layout } from './Layout';
 
 // The inbox check's test email (PLAN §9.7 step 2, D-14, D-27): a lead email for a test lead whose
-// address is the owner's own other address. Until M4 builds /a/{t}/edit and /a/{t}/dismiss it has
-// only the send button and the default-mail-app link (law 5: no button that leads nowhere); the
-// edit and dismiss buttons render only when the caller passes their URLs (D-62).
+// address is the owner's own other address, with the same buttons as a real one ("Send from my
+// email", "Edit first", "Not a real lead") and the default-mail-app link. The edit and dismiss
+// buttons render only when the caller passes their URLs (law 5: no button that leads nowhere).
 // The owner taps "Send from my email", sends the draft from their own mailbox, then replies to it
 // from the other address; the `inbox_check` job looks for both in HubSpot. It opens with the
 // "isn't monitored" line every lead email carries (D-27). Honest copy (law 5): it says plainly
@@ -30,9 +30,9 @@ export interface InboxTestProps {
   sendUrl: string;
   /** `/a/{send token}/send?via=mailto`: the default mail app. */
   mailtoUrl: string;
-  /** `/a/{edit token}/edit`; M4. Without it the button is left out. */
+  /** `/a/{edit token}/edit`. Without it the button is left out. */
   editUrl?: string | undefined;
-  /** `/a/{dismiss token}/dismiss`; M4. Without it the button is left out. */
+  /** `/a/{dismiss token}/dismiss`. Without it the button is left out. */
   dismissUrl?: string | undefined;
   /** The setup page that shows the result (`/onboarding/inbox`). */
   checkUrl: string;
@@ -135,6 +135,12 @@ export function InboxTest(props: InboxTestProps) {
           Open in default mail app
         </Link>
       </Text>
+      {props.editUrl === undefined && props.dismissUrl === undefined ? null : (
+        <Text style={note}>
+          The other buttons work like the ones on real lead emails: &quot;Edit first&quot; lets you change your reply before you send
+          it, and &quot;Not a real lead&quot; only marks this test lead.
+        </Text>
+      )}
       <Text style={note}>
         See the result on the{' '}
         <Link href={props.checkUrl} style={link}>

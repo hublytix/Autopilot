@@ -2,6 +2,7 @@ import 'server-only';
 import { registerAccountNotifications } from '@/server/services/accounts/emails';
 import { registerBaselineJobs } from '@/server/services/baseline/job';
 import { registerBriefJobs } from '@/server/services/brief/job';
+import { registerDraftingNotifications } from '@/server/services/drafting/cap';
 import { registerInboxCheck } from '@/server/services/inbox-check/job';
 import { registerLeadProcessJob } from '@/server/services/leads/process';
 import { registerOnboardingNotifications } from '@/server/services/onboarding/notifications';
@@ -43,7 +44,9 @@ export type Registration = (registries: Registries) => void;
  * Filled in as the services that own each kind arrive. M2: portal_poll + privacy_delete (intake),
  * lead_process + its failure path, and the reconnect / billing_inactive / owner_alert resumers
  * (owner_alert also resumes M3's settings-change alerts). M3: verify_notify, brief_generate,
- * inbox_check + the inbox_test resumer, baseline.
+ * inbox_check + the inbox_test resumer, baseline. M4: lead_process drafts and emails the lead, and
+ * registerLeadProcessJob also registers the lead email resumers (new_lead, needs_touch, follow_up,
+ * reply_detected); the lead_cap resumer (services/drafting).
  */
 const REGISTRATIONS: readonly Registration[] = [
   registerIntakeJobs,
@@ -53,6 +56,7 @@ const REGISTRATIONS: readonly Registration[] = [
   registerBriefJobs,
   registerInboxCheck,
   registerBaselineJobs,
+  registerDraftingNotifications,
 ];
 
 /** Fresh registries holding every registration (the simulation's; the app uses the defaults below). */

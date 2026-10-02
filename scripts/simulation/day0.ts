@@ -1,4 +1,4 @@
-// Simulation stage 2, Day 0 intake (PLAN §13 calendar, D-39), Tue 2026-10-06 America/New_York:
+// Simulation stage 2, Day 0 (PLAN §13 calendar, D-39), Tue 2026-10-06 America/New_York:
 //   #1 10:00 new contact, normal enquiry      webhook
 //   #2 10:05 new contact, no message           webhook
 //   #3 10:10 new contact, spam                 webhook
@@ -7,104 +7,14 @@
 //   #5 10:31 a baseline-fixture contact again  NO webhook: the 10:35 cron poll finds it
 // Each webhook is HubSpot's `object.creation` for the new contact, v3-signed for
 // HUBSPOT_WEBHOOK_TARGET_URL, delivered to the real route handler. M2 checks intake and
-// classification only; drafts and the "new lead" emails arrive in M4.
+// classification. Since M4 the real lead_process also drafts #1, #2, #5 and #6 and sends their
+// `new_lead` emails, and the owner's Day 0 taps run here too (day0-owner.ts: Send on #1 at 10:12,
+// #2 at 10:30, #6 at 10:40); the emails, clicks, follow-up rows and statuses are checked by the
+// `day-0-emails` stage (day0-emails.ts).
 import { handleHubSpotWebhook } from '@/server/http/hubspot-webhook';
+import { scheduleDay0OwnerActions } from './day0-owner';
+import { DAY0_END, DAY0_NOTIFIED, DAY0_SUBMISSIONS, type ScenarioSubmission } from './day0-scenario';
 import type { Simulation } from './types';
-
-const CONTACT_US = 'Contact us';
-const REQUEST_A_QUOTE = 'Request a quote';
-
-/** One scenario submission. Every name, address and message is invented (example domains). */
-export interface ScenarioSubmission {
-  /** The scenario's number (#1…#6); the lead's ref is `L{n}`. */
-  n: number;
-  /** Local time on Tue 2026-10-06. */
-  at: string;
-  form: string;
-  email: string;
-  firstName: string;
-  lastName: string;
-  company?: string | undefined;
-  /** Omitted: the lead left the message field empty (#2). */
-  message?: string | undefined;
-  /** HubSpot fires `object.creation` only for a contact the submission created. */
-  webhook: boolean;
-  expected: { classification: string; processingState: string; trigger: 'webhook' | 'cron' };
-}
-
-export const DAY0_SUBMISSIONS: readonly ScenarioSubmission[] = [
-  {
-    n: 1,
-    at: '2026-10-06T10:00:00',
-    form: REQUEST_A_QUOTE,
-    email: 'jordan.lee@example.com',
-    firstName: 'Jordan',
-    lastName: 'Lee',
-    company: 'Lee Property Management',
-    message: 'We manage a small apartment building and need a quote to replace the main water shut-off valve. Is next week possible?',
-    webhook: true,
-    expected: { classification: 'lead', processingState: 'processing', trigger: 'webhook' },
-  },
-  {
-    n: 2,
-    at: '2026-10-06T10:05:00',
-    form: CONTACT_US,
-    email: 'alex.morgan@example.org',
-    firstName: 'Alex',
-    lastName: 'Morgan',
-    webhook: true,
-    expected: { classification: 'unclear', processingState: 'processing', trigger: 'webhook' },
-  },
-  {
-    n: 3,
-    at: '2026-10-06T10:10:00',
-    form: CONTACT_US,
-    email: 'promo.desk@example.net',
-    firstName: 'Promo',
-    lastName: 'Desk',
-    message: 'Earn daily with bitcoin trading from home. Click here to claim your starter bonus today.',
-    webhook: true,
-    expected: { classification: 'spam', processingState: 'filtered', trigger: 'webhook' },
-  },
-  {
-    n: 4,
-    at: '2026-10-06T10:15:00',
-    form: REQUEST_A_QUOTE,
-    email: 'growth.team@example.com',
-    firstName: 'Casey',
-    lastName: 'Brandt',
-    company: 'Rankwell Digital',
-    message: 'We are a marketing agency that helps plumbers reach the first page of Google with our SEO packages. Can we book a call?',
-    webhook: true,
-    expected: { classification: 'vendor_pitch', processingState: 'filtered', trigger: 'webhook' },
-  },
-  {
-    n: 6,
-    at: '2026-10-06T10:20:00',
-    form: CONTACT_US,
-    email: 'dana.whitfield@example.net',
-    firstName: 'Dana',
-    lastName: 'Whitfield',
-    message: 'Our kitchen sink drains very slowly and gurgles when the dishwasher runs. Could someone come by Thursday or Friday?',
-    webhook: true,
-    expected: { classification: 'lead', processingState: 'processing', trigger: 'webhook' },
-  },
-  {
-    // Lena Fischer (fixture contact 105) wrote in on 2026-09-29 and never got a logged reply.
-    n: 5,
-    at: '2026-10-06T10:31:00',
-    form: CONTACT_US,
-    email: 'lena.fischer@example.org',
-    firstName: 'Lena',
-    lastName: 'Fischer',
-    message: 'Following up on my note from last week: the water pressure upstairs is still low. Can someone come out this week?',
-    webhook: false,
-    expected: { classification: 'lead', processingState: 'processing', trigger: 'cron' },
-  },
-];
-
-/** End of Day 0's intake window (the last owner action of Day 0 is at 10:41). */
-export const DAY0_END = '2026-10-06T10:41:00';
 
 async function submit(sim: Simulation, submission: ScenarioSubmission): Promise<void> {
   const { hubspot } = sim.fakes;
@@ -163,6 +73,7 @@ export async function runDay0(sim: Simulation): Promise<void> {
   for (const submission of DAY0_SUBMISSIONS) {
     sim.travel.at(sim.local(submission.at), `submission #${submission.n}`, () => submit(sim, submission));
   }
+  scheduleDay0OwnerActions(sim);
   await sim.travel.advanceTo(sim.local(DAY0_END));
 
   const accountId = sim.scenario.accountId;
@@ -205,27 +116,47 @@ export async function runDay0(sim: Simulation): Promise<void> {
   const historical = floor === null ? leads.length : leads.filter((row) => row.submitted_at.getTime() <= floor.getTime()).length;
   sim.check('day0.no_historical_lead', floor !== null && historical === 0, `${historical} leads submitted before the floor`);
 
-  // The drafts and their new_lead emails arrive in M4.
-  const day0Emails = sim.fakes.mailer.sent.length - emailsBefore;
-  sim.check('day0.no_emails_yet', day0Emails === 0, `${day0Emails} emails`);
+  // M4: lead_process drafts #1, #2, #5 and #6 and emails each one (the emails are checked in day0-emails.ts).
+  const day0Emails = sim.fakes.mailer.sent.slice(emailsBefore).map((mail) => mail.kind);
+  sim.check(
+    'day0.four_new_lead_emails_and_nothing_else',
+    day0Emails.length === DAY0_NOTIFIED.length && day0Emails.every((kind) => kind === 'new_lead'),
+    day0Emails.join(', ') || 'no emails',
+  );
 
+  // Every job has finished except the follow-up rows of the "notified" transactions (2 per notified
+  // lead, Thu and Sun); they wait in the scheduler until M5's follow-up job runs them.
   const unfinished = await sim.db.query<{ kind: string; status: string }>(
     `select kind, status from public.scheduled_jobs where status not in ('done', 'cancelled', 'skipped') order by kind, status`,
   );
+  const unfinishedOther = unfinished.filter((row) => !(row.kind === 'followup' && row.status === 'scheduled'));
+  const followUps = unfinished.length - unfinishedOther.length;
   sim.check(
-    'day0.every_job_done_cancelled_or_skipped',
-    unfinished.length === 0,
-    unfinished.length === 0 ? undefined : unfinished.map((row) => `${row.kind}:${row.status}`).join(', '),
+    'day0.every_job_done_cancelled_or_skipped_but_the_follow_ups',
+    unfinishedOther.length === 0 && followUps === 2 * DAY0_NOTIFIED.length,
+    `${followUps} follow-ups scheduled${unfinishedOther.length === 0 ? '' : `; unfinished ${unfinishedOther.map((row) => `${row.kind}:${row.status}`).join(', ')}`}`,
   );
-  sim.check('day0.no_pending_deliveries', sim.fakes.scheduler.pending().length === 0, `${sim.fakes.scheduler.pending().length} queued`);
+  const pending = sim.fakes.scheduler.pending();
+  sim.check(
+    'day0.only_the_follow_ups_are_queued',
+    pending.length === 2 * DAY0_NOTIFIED.length && pending.every((message) => message.kind === 'followup'),
+    `${pending.length} queued: ${[...new Set(pending.map((message) => message.kind))].join(', ') || 'none'}`,
+  );
 
   const aiCalls = (
     await sim.db.query<{ purpose: string; model: string; outcome: string }>(`select purpose, model, outcome from public.ai_calls order by created_at, purpose`)
   ).slice(aiCallsBefore);
-  const fast = sim.deps.env.ANTHROPIC_MODEL_FAST;
+  const { ANTHROPIC_MODEL_FAST: fast, ANTHROPIC_MODEL_DRAFT: draftModel } = sim.deps.env;
+  const classifyCalls = aiCalls.filter((call) => call.purpose === 'classify');
   sim.check(
     'day0.classification_calls_use_the_fast_model',
-    aiCalls.length > 0 && aiCalls.every((call) => call.purpose === 'classify' && call.model === fast && call.outcome === 'ok'),
-    aiCalls.map((call) => `${call.purpose}:${call.model}:${call.outcome}`).join(', '),
+    classifyCalls.length === DAY0_SUBMISSIONS.length && classifyCalls.every((call) => call.model === fast && call.outcome === 'ok'),
+    classifyCalls.map((call) => `${call.model}:${call.outcome}`).join(', '),
+  );
+  const draftCalls = aiCalls.filter((call) => call.purpose !== 'classify');
+  sim.check(
+    'day0.one_draft_call_per_notified_lead_on_the_draft_model',
+    draftCalls.length === DAY0_NOTIFIED.length && draftCalls.every((call) => call.purpose === 'draft' && call.model === draftModel && call.outcome === 'ok'),
+    draftCalls.map((call) => `${call.purpose}:${call.model}:${call.outcome}`).join(', '),
   );
 }

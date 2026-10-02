@@ -44,7 +44,7 @@ describe('templates', () => {
     );
     expect(reconnectHubSpotSubject('Hublytix Autopilot')).toBe('Reconnect HubSpot to keep Hublytix Autopilot running');
     expect(reconnectHubSpotSubject('Acme Replies')).toBe('Reconnect HubSpot to keep Acme Replies running');
-    expect(text).toContain('has stopped checking for new leads and drafting replies');
+    expect(text).toContain('has stopped checking for new leads and drafting your replies');
     expect(text).toContain('we delete your Hublytix Autopilot data for this HubSpot account on November 5, 2026');
     expect(text).toContain('Reconnect HubSpot https://app.example/api/hubspot/install');
     expect(text).toContain('Super Admin');
@@ -59,7 +59,7 @@ describe('templates', () => {
   it('BillingInactive and OwnerAlert render their copy and buttons', async () => {
     const billing = await renderEmail(createElement(BillingInactive, { productName: 'Hublytix Autopilot', billingUrl: 'https://app.example/dashboard/billing' }));
     expect(billingInactiveSubject('Hublytix Autopilot')).toBe("Your Hublytix Autopilot trial or subscription isn't active");
-    expect(billing.text).toContain('stopped drafting replies');
+    expect(billing.text).toContain('stopped drafting your replies');
     expect(billing.text).toContain('Open billing https://app.example/dashboard/billing');
     const alert = await renderEmail(
       createElement(OwnerAlert, { productName: 'P', heading: 'Heads up', paragraphs: ['First.', 'Second.'], action: { label: 'Sign in', url: 'https://app.example/login' } }),

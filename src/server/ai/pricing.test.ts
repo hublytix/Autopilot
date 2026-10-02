@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { costMicroUsd, hasKnownPrice } from './pricing';
+import { conservativeCostMicroUsd, costMicroUsd, hasKnownPrice } from './pricing';
 
 const SONNET = 'claude-sonnet-5-5';
 const HAIKU = 'claude-haiku-4-5-20251001';
@@ -45,6 +45,13 @@ describe('costMicroUsd (TV6, prices as of 2026-10-01)', () => {
     expect(hasKnownPrice('claude-opus-5-5')).toBe(false);
     expect(hasKnownPrice('constructor')).toBe(false);
     expect(costMicroUsd({ model: 'claude-opus-5-5', usage: { inputTokens: 10, outputTokens: 10 } })).toBeNull();
+  });
+
+  it('costs an unknown model at the most expensive known rate, a known one exactly', () => {
+    // Sonnet 5.5's rates are the highest known: 1500 in / 250 out = 5500 micro-USD.
+    expect(conservativeCostMicroUsd({ model: 'claude-sonnet-5-5-20261201', usage: { inputTokens: 1500, outputTokens: 250 } })).toBe(5500);
+    expect(conservativeCostMicroUsd({ model: 'claude-haiku-4-5', usage: { inputTokens: 600, outputTokens: 20 } })).toBe(700);
+    expect(conservativeCostMicroUsd({ model: 'constructor', usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 1000, cacheWriteTokens: 1000 } })).toBe(2700);
   });
 
   it('treats missing or nonsensical token counts as zero', () => {

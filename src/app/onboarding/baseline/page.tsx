@@ -123,7 +123,7 @@ export default async function OnboardingBaselinePage({ searchParams }: { searchP
         title="Setup is complete"
         description={
           gate.processingState === 'active'
-            ? 'New leads on your chosen forms now get a draft reply sent to your alert addresses.'
+            ? 'For each new lead on your chosen forms, a draft of your reply is now sent to your alert addresses.'
             : "Your dashboard shows your account's status and anything that needs your attention."
         }
       >

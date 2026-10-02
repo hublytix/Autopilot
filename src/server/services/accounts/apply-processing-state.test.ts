@@ -120,7 +120,7 @@ describe('applyProcessingState', () => {
     expect(mail?.to).toEqual(['owner@brightside-plumbing.example']);
     expect(mail?.replyTo).toBe(rig.deps.env.EMAIL_REPLY_TO);
     expect(mail?.idempotencyKey).toBe(`${rig.deps.env.ENV_NAMESPACE}:billing-inactive:${accountId}:${lostAt.toISOString()}`);
-    expect(mail?.text).toContain('stopped drafting replies');
+    expect(mail?.text).toContain('stopped drafting your replies');
     const reservation = await getDb().one<{ status: string }>(`select status from notifications_sent where kind = 'billing_inactive'`);
     expect(reservation.status).toBe('sent');
 

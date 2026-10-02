@@ -1,5 +1,5 @@
 import 'server-only';
-import { costMicroUsd } from '@/server/ai/pricing';
+import { conservativeCostMicroUsd, hasKnownPrice } from '@/server/ai/pricing';
 import type { AiCallOutcome, AiCallPurpose, RefusalCategory } from '@/server/domain/types';
 import type { Db } from '@/server/db';
 import { raiseAlert } from '@/server/jobs/alert';
@@ -26,8 +26,10 @@ export interface AiCallRecord {
   outputTokens: number;
   cacheCreationInputTokens: number;
   cacheReadInputTokens: number;
-  /** null: the model has no known price (stored as 0, with an admin alert). */
-  costMicroUsd: number | null;
+  /** The exact cost; for a model without a known price, the cost at the most expensive known rate (`costEstimated`). */
+  costMicroUsd: number;
+  /** The serving model has no known price: `costMicroUsd` is the conservative estimate, and recording it alerts the admin. */
+  costEstimated: boolean;
   latencyMs: number;
   outcome: AiCallOutcome;
   createdAt: Date;
@@ -54,7 +56,8 @@ export function aiCallRecord<T>(context: AiCallContext, result: LlmResult<T>, ou
   const usage = result.usage;
   const refusalCategory = result.ok ? null : (result.refusalCategory ?? null);
   const stopReason = result.stopReason ?? null;
-  const cost = usage === undefined ? 0 : costMicroUsd({ model, usage, stopReason, refusalCategory });
+  const cost = usage === undefined ? 0 : conservativeCostMicroUsd({ model, usage, stopReason, refusalCategory });
+  const costEstimated = usage !== undefined && !hasKnownPrice(model);
   return {
     accountId: context.accountId,
     leadId: context.leadId,
@@ -68,7 +71,8 @@ export function aiCallRecord<T>(context: AiCallContext, result: LlmResult<T>, ou
     outputTokens: int(usage?.outputTokens),
     cacheCreationInputTokens: int(usage?.cacheWriteTokens),
     cacheReadInputTokens: int(usage?.cacheReadTokens),
-    costMicroUsd: cost === null ? null : int(cost),
+    costMicroUsd: int(cost),
+    costEstimated,
     latencyMs: int(context.finishedAt.getTime() - context.startedAt.getTime()),
     outcome,
     createdAt: context.finishedAt,
@@ -76,11 +80,13 @@ export function aiCallRecord<T>(context: AiCallContext, result: LlmResult<T>, ou
 }
 
 /**
- * Inserts the row and returns its id (int8, as a string). An unknown model's cost is stored as 0
- * (the column is NOT NULL) and raises an admin alert so the rate table gets updated (D-25).
+ * Inserts the row and returns its id (int8, as a string). A model without a known price is stored
+ * at the most expensive known rate, so the budget breaker errs towards tripping, and raises an admin
+ * alert so the rate table gets updated (D-25, D-36). Such rows are the ones whose `model` the rate
+ * table does not list.
  */
 export async function recordAiCall(db: Db, record: AiCallRecord): Promise<string> {
-  if (record.costMicroUsd === null) raiseAlert('ai_price_unknown_model', { model: record.model, purpose: record.purpose });
+  if (record.costEstimated) raiseAlert('ai_price_unknown_model', { model: record.model, purpose: record.purpose, reason: 'costed_at_highest_known_rate' });
   const row = await db.one<{ id: string }>(
     `insert into ai_calls (account_id, lead_id, purpose, attempt, model, request_id, stop_reason, refusal_category,
                            input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
@@ -100,7 +106,7 @@ export async function recordAiCall(db: Db, record: AiCallRecord): Promise<string
       record.outputTokens,
       record.cacheCreationInputTokens,
       record.cacheReadInputTokens,
-      record.costMicroUsd ?? 0,
+      record.costMicroUsd,
       record.latencyMs,
       record.outcome,
       record.createdAt,

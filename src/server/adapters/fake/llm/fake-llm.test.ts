@@ -1,6 +1,7 @@
 import { load } from 'cheerio';
 import { describe, expect, it, vi } from 'vitest';
 import portalJson from '../../../../../test/fixtures/hubspot-portal.json';
+import { validateDraft } from '@/server/domain/validator';
 import type { BriefDraft, BriefPage, DraftLeadInput, DraftOutput, LlmResult } from '@/server/ports/llm';
 import { FakeClock } from '../clock';
 import { FIXTURE_BOOKING_LINK, FIXTURE_SITE_URL, FakeWebFetcher } from '../web-fetcher';
@@ -193,6 +194,25 @@ describe('FakeLLM drafts', () => {
     expect(draft.body.startsWith('Hi there,')).toBe(true);
     expect(draft.used_booking_link).toBe(false);
     expect(draft.flags).toEqual(['missing_info']);
+  });
+
+  it.each([null, '', '   '])('never claims to have read a message the form did not have (%j)', async (message) => {
+    const lead = { ...LEAD, message };
+    const draft = value(await new FakeLLM().draft({ brief: BRIEF, lead, previousErrorCodes: [] }));
+    expect(draft.body).not.toMatch(/read your message|since you wrote/i);
+    expect(draft.body).toContain('Your form came through without a message');
+    expect(validateDraft(draft, { kind: 'initial', brief: BRIEF, firstName: 'Maya', leadMessage: message, siteUrl: FIXTURE_SITE_URL })).toEqual([]);
+  });
+
+  it('answers what the enquiry asks, so drafts differ by message', async () => {
+    const pricing = value(await new FakeLLM().draft({ brief: BRIEF, lead: { ...LEAD, message: 'How much would a new boiler cost for a three-bed house?' }, previousErrorCodes: [] }));
+    const urgent = value(await new FakeLLM().draft({ brief: BRIEF, lead: LEAD, previousErrorCodes: [] }));
+    expect(pricing.body).toContain('before we can talk about cost');
+    expect(urgent.body).toContain('cannot wait');
+    expect(pricing.body).not.toBe(urgent.body);
+    for (const [draft, message] of [[pricing, 'How much would a new boiler cost for a three-bed house?'], [urgent, LEAD.message]] as const) {
+      expect(validateDraft(draft, { kind: 'initial', brief: BRIEF, firstName: 'Maya', leadMessage: message, siteUrl: FIXTURE_SITE_URL })).toEqual([]);
+    }
   });
 
   it('flags a pricing question without quoting a price', async () => {

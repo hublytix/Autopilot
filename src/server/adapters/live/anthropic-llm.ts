@@ -14,7 +14,16 @@ import {
 } from '@/server/ai/model-params';
 import { buildBriefPrompt } from '@/server/ai/prompts/brief';
 import { buildClassifyPrompt } from '@/server/ai/prompts/classify';
-import { BRIEF_JSON_SCHEMA, BriefOutputSchema, CLASSIFICATION_JSON_SCHEMA, ClassificationOutputSchema } from '@/server/ai/schemas';
+import { buildDraftPrompt } from '@/server/ai/prompts/draft';
+import { buildFollowUpPrompt } from '@/server/ai/prompts/followup';
+import {
+  BRIEF_JSON_SCHEMA,
+  BriefOutputSchema,
+  CLASSIFICATION_JSON_SCHEMA,
+  ClassificationOutputSchema,
+  DRAFT_JSON_SCHEMA,
+  DraftOutputSchema,
+} from '@/server/ai/schemas';
 import { isRefusalCategory } from '@/server/domain/types';
 import { log as defaultLog, type Logger } from '@/server/obs/log';
 import type { Clock } from '@/server/ports/clock';
@@ -49,8 +58,7 @@ import type {
 // ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN cannot turn on body logging or redirect prompts. Error
 // messages from the SDK or JSON.parse are never read; logs carry class, status, request id and codes.
 //
-// Status: classify (M2) and generateBrief (M3) are complete. draft/draftFollowUp (M4) share #call but
-// their prompts are not built yet, so they answer FATAL-CONFIG `not_built` without a network call.
+// Status: classify (M2), generateBrief (M3), draft and draftFollowUp (M4) are complete.
 
 /** The part of the SDK client this adapter uses (tests pass a stub, or a real client with a stubbed fetch). */
 export interface AnthropicMessagesClient {
@@ -220,20 +228,41 @@ export class AnthropicLLM implements LLM {
     });
   }
 
-  // M4: the draft and follow-up prompts call #call({purpose: 'draft' | 'followup', model: draft,
-  // attempt: previousErrorCodes.length > 0 ? 2 : 1, afterMaxTokens: previousErrorCodes.includes('max_tokens'),
-  // schema: DRAFT_JSON_SCHEMA, output: DraftOutputSchema, signal}).
-  async draft(_input: DraftInput, _options?: LlmCallOptions): Promise<LlmResult<DraftOutput>> {
-    return this.#notBuilt('draft', this.#models.draft);
+  /**
+   * The owner's first reply (PLAN §9.3 step 5, D-24, D-47): the draft row of the table
+   * (ANTHROPIC_DRAFT_THINKING / ANTHROPIC_DRAFT_EFFORT / ANTHROPIC_DRAFT_MAX_TOKENS). A retry (any
+   * previous error codes) is a fresh single-turn request carrying them; after `max_tokens` it gets the
+   * doubled budget. The validator runs in the caller.
+   */
+  async draft(input: DraftInput, options?: LlmCallOptions): Promise<LlmResult<DraftOutput>> {
+    const prompt = buildDraftPrompt(input);
+    return this.#call({
+      purpose: 'draft',
+      model: this.#models.draft,
+      attempt: input.previousErrorCodes.length > 0 ? 2 : 1,
+      afterMaxTokens: input.previousErrorCodes.includes('max_tokens'),
+      system: prompt.system,
+      messages: prompt.messages,
+      schema: DRAFT_JSON_SCHEMA,
+      output: DraftOutputSchema,
+      signal: options?.signal,
+    });
   }
 
-  async draftFollowUp(_input: FollowUpDraftInput, _options?: LlmCallOptions): Promise<LlmResult<DraftOutput>> {
-    return this.#notBuilt('followup', this.#models.draft);
-  }
-
-  #notBuilt(purpose: ModelPurpose, model: string): LlmFailure {
-    this.#log.error('anthropic prompt not built', { provider: 'anthropic', purpose, model, errorCode: 'not_built' });
-    return { ok: false, failure: 'fatal_config', model, errorCode: 'not_built' };
+  /** Follow-up n (PLAN §9.5 step 5): the same parameters, schema and retry rule as `draft`. */
+  async draftFollowUp(input: FollowUpDraftInput, options?: LlmCallOptions): Promise<LlmResult<DraftOutput>> {
+    const prompt = buildFollowUpPrompt(input);
+    return this.#call({
+      purpose: 'followup',
+      model: this.#models.draft,
+      attempt: input.previousErrorCodes.length > 0 ? 2 : 1,
+      afterMaxTokens: input.previousErrorCodes.includes('max_tokens'),
+      system: prompt.system,
+      messages: prompt.messages,
+      schema: DRAFT_JSON_SCHEMA,
+      output: DraftOutputSchema,
+      signal: options?.signal,
+    });
   }
 
   #failed(spec: { purpose: ModelPurpose; model: string }, failure: LlmFailure, extra: { httpStatus?: number | undefined; errorName?: string | undefined } = {}): LlmFailure {

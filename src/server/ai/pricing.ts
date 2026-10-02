@@ -12,8 +12,10 @@ import type { LlmUsage } from '@/server/ports/llm';
 // - A refusal before any output (`output_tokens` 0) is billed only in the `bio`, `frontier_llm` and
 //   `reasoning_extraction` categories; otherwise it costs 0. This is a heuristic: the docs bill by
 //   "before any output", and the stored usage numbers are not the billed ones.
-// - An unknown model has no cost (`null`): the caller records 0 and raises an admin alert, because a
-//   guessed rate would make the budget breaker wrong in either direction.
+// - An unknown model (a dated snapshot or a new alias the table does not list yet) has no exact
+//   cost (`costMicroUsd` → null). The caller records `conservativeCostMicroUsd` instead, the cost at
+//   the most expensive known rate, and raises an admin alert: the AI budget breaker (D-36) then errs
+//   towards tripping, never towards never tripping.
 // Rates in nano-USD per token (USD per million tokens × 1000), so fractional micro-USD rates stay
 // integers; the total is rounded up to whole micro-USD. Prices as of 2026-10-01: re-check the
 // pricing page during WIRE_UP.
@@ -38,6 +40,14 @@ const RATES: Readonly<Record<string, Rates>> = {
 /** Refusal categories whose before-output refusals are still billed (as of September 2026). */
 const BILLED_REFUSAL_CATEGORIES: ReadonlySet<RefusalCategory> = new Set<RefusalCategory>(['bio', 'frontier_llm', 'reasoning_extraction']);
 
+/** The most expensive known rates, per kind of token: what an unknown model is costed at. */
+const HIGHEST: Rates = {
+  input: Math.max(...Object.values(RATES).map((rates) => rates.input)),
+  output: Math.max(...Object.values(RATES).map((rates) => rates.output)),
+  cacheWrite5m: Math.max(...Object.values(RATES).map((rates) => rates.cacheWrite5m)),
+  cacheRead: Math.max(...Object.values(RATES).map((rates) => rates.cacheRead)),
+};
+
 function ratesFor(model: string): Rates | undefined {
   return Object.hasOwn(RATES, model) ? RATES[model] : undefined;
 }
@@ -61,7 +71,15 @@ function count(value: number | undefined): number {
 /** The call's cost in micro-USD, or null when the model has no known price. */
 export function costMicroUsd(input: CostInput): number | null {
   const rates = ratesFor(input.model);
-  if (rates === undefined) return null;
+  return rates === undefined ? null : costAt(rates, input);
+}
+
+/** The exact cost for a known model; for an unknown one, the cost at the most expensive known rates. */
+export function conservativeCostMicroUsd(input: CostInput): number {
+  return costAt(ratesFor(input.model) ?? HIGHEST, input);
+}
+
+function costAt(rates: Rates, input: CostInput): number {
   const { usage } = input;
   const output = count(usage.outputTokens);
   if (input.stopReason === 'refusal' && output === 0) {

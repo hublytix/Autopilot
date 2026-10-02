@@ -5,7 +5,8 @@
 //
 //   install → fake consent (Approve) → OAuth callback (branch a) → /onboarding/email → magic link
 //   (read from fake.dev_outbox) → GET + POST /auth/confirm in a FRESH cookie jar → onboarding pages
-//   (brief, forms, preferences, inbox, baseline) → Finish → /dashboard (the M3 placeholder until M6).
+//   (brief, forms, preferences, inbox, baseline) → the inbox test email's edit and dismiss links (M4:
+//   GET + POST each, no JavaScript) → Finish → /dashboard (the M3 placeholder until M6).
 //
 // The app's PGlite is single-process, so the magic link is read with the server stopped and the
 // server is started again on the same FAKE_DB_DIR: the link still works after the restart only
@@ -28,7 +29,9 @@ interface Check {
 
 const checks: Check[] = [];
 
-function check(step: string, ok: boolean, detail: string): boolean {
+function check(step: string, ok: boolean, rawDetail: string): boolean {
+  // Action tokens never reach the output (law 4), not even the fake run's.
+  const detail = rawDetail.replaceAll(/apt_[A-Za-z0-9_-]{43}/g, '{t}');
   checks.push({ step, ok, detail });
   console.log(`e2e: ${ok ? 'PASS' : 'FAIL'} ${step} (${detail})`);
   return ok;
@@ -114,6 +117,24 @@ function scriptsNonced(response: Response, $: CheerioAPI): { ok: boolean; detail
   const scripts = $('script').toArray();
   const missing = scripts.filter((script) => $(script).attr('nonce') !== nonce).length;
   return { ok: nonce !== undefined && scripts.length > 0 && missing === 0, detail: `${scripts.length} scripts, ${missing} without the nonce` };
+}
+
+/** The edit and dismiss tokens of the newest inbox_test email in fake.dev_outbox (server stopped). */
+async function readInboxTestLinks(dataDir: string): Promise<{ edit: string; dismiss: string } | null> {
+  const db = createPgliteDb({ dataDir });
+  try {
+    const row = await db.maybeOne<{ html: string }>(`select html from fake.dev_outbox where kind = 'inbox_test' order by created_at desc, id desc limit 1`);
+    const edit = row === null ? null : /\/a\/(apt_[A-Za-z0-9_-]{43})\/edit"/.exec(row.html)?.[1];
+    const dismiss = row === null ? null : /\/a\/(apt_[A-Za-z0-9_-]{43})\/dismiss"/.exec(row.html)?.[1];
+    return edit === undefined || edit === null || dismiss === undefined || dismiss === null ? null : { edit, dismiss };
+  } finally {
+    await db.close();
+  }
+}
+
+/** No cache may store it (a Server Action's answer carries Next's `no-store` without `private`). */
+function isNoStore(response: Response): boolean {
+  return (response.headers.get('cache-control') ?? '').includes('no-store');
 }
 
 async function readMagicLink(dataDir: string): Promise<{ url: string; tokenHash: string; type: string } | null> {
@@ -260,6 +281,59 @@ async function run(dataDir: string): Promise<void> {
     const inboxPage = await owner.page('/onboarding/inbox');
     const inboxStarted = await owner.submit(inboxPage.$, '/onboarding/inbox', 'input[name="test_address"]', { test_address: 'owner.personal@example.net' });
     check('inbox test started', inboxStarted.status === 303 && locationPath(inboxStarted, baseUrl) === '/onboarding/inbox?result=started', `${inboxStarted.status} → ${locationPath(inboxStarted, baseUrl) ?? 'page'}`);
+
+    // M4: the inbox_test email's "Edit first" and "Not a real lead" links (read from fake.dev_outbox
+    // with the server stopped, as the magic link was). They work like a lead email's: the edit POST
+    // answers 200 with a compose link built from the edited text; dismissing only marks the test lead.
+    await sleep(500);
+    await stopServer(server);
+    const links = await readInboxTestLinks(dataDir);
+    check('inbox_test email has edit and dismiss links', links !== null, links === null ? 'none' : 'found');
+    server = startServer(port, env);
+    await waitUntilReady(baseUrl, server);
+    if (links !== null) {
+      const editPath = `/a/${links.edit}/edit`;
+      const editPage = await owner.page(editPath);
+      const editNonce = scriptsNonced(editPage.response, editPage.$);
+      check(
+        'GET /a/{t}/edit',
+        editPage.response.status === 200 && isPrivate(editPage.response) && editNonce.ok && editPage.$('textarea[name="body"]').length === 1,
+        `${editPage.response.status}, private ${isPrivate(editPage.response)}, ${editNonce.detail}`,
+      );
+      const editedBody = 'Hi,\n\nThis is my edited test reply, sent from my own mailbox.\n\nThanks';
+      const edited = await owner.submit(editPage.$, editPath, 'textarea[name="body"]', { subject: 'Edited inbox test', body: editedBody });
+      const editedHtml = await edited.text();
+      const result = load(editedHtml);
+      const sendHref = result('a:contains("Send from my email")').attr('href') ?? '';
+      check(
+        'POST /a/{t}/edit (no JavaScript) → 200 result with a Gmail link from the edited text',
+        edited.status === 200 &&
+          isNoStore(edited) &&
+          editedHtml.includes('Your edited reply is ready') &&
+          sendHref.startsWith('https://mail.google.com/') &&
+          sendHref.includes(encodeURIComponent('This is my edited test reply')),
+        `${edited.status}, no-store ${isNoStore(edited)}, link ${sendHref === '' ? 'none' : new URL(sendHref).host}`,
+      );
+      const dismissPath = `/a/${links.dismiss}/dismiss`;
+      await owner.page(dismissPath);
+      const dismissPage = await owner.page(dismissPath);
+      check(
+        'GET /a/{t}/dismiss (twice) asks and changes nothing',
+        dismissPage.response.status === 200 && isPrivate(dismissPage.response) && dismissPage.html.includes('Mark this as not a real lead?'),
+        `${dismissPage.response.status}`,
+      );
+      const dismissed = await owner.submit(dismissPage.$, dismissPath, 'input[name="token"]');
+      await dismissed.body?.cancel();
+      const donePage = await owner.page(dismissPath);
+      check(
+        'POST /a/{t}/dismiss → 303 back → done',
+        dismissed.status === 303 && locationPath(dismissed, baseUrl) === dismissPath && donePage.html.includes('Done — this lead won'),
+        `${dismissed.status} → ${locationPath(dismissed, baseUrl) ?? 'none'}`,
+      );
+      const again = await owner.submit(dismissPage.$, dismissPath, 'input[name="token"]');
+      await again.body?.cancel();
+      check('second dismiss POST changes nothing', again.status === 303 && locationPath(again, baseUrl) === dismissPath, `${again.status} → ${locationPath(again, baseUrl) ?? 'none'}`);
+    }
 
     // Baseline (started by the page) and Finish.
     const baselinePage = await owner.page('/onboarding/baseline');

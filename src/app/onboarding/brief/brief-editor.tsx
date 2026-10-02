@@ -1,9 +1,8 @@
 'use client';
 
 import { useActionState } from 'react';
-import { Alert, Checkbox, Field, fieldDescription, Input, Select, SubmitButton } from '@/components/ui';
+import { Alert, Checkbox, Field, fieldDescription, Input, Select, SubmitButton, Textarea } from '@/components/ui';
 import type { BriefFormState, BriefFormValues, FieldIssue } from '@/server/actions/onboarding/types';
-import { Textarea } from './textarea';
 
 // The brief editor (brief §5.3, PLAN §7.5, D-47): every brief field, editable. Lists are one item
 // per line; up to 8 FAQ pairs; prices off by default with a warning; and the booking link is an
@@ -204,7 +203,7 @@ export function BriefEditor({ action, initial, bookingLink, limits }: BriefEdito
         </Field>
       </fieldset>
 
-      <Field id="sign_off_name" label="Sign replies as" hint="The name at the end of each draft, for example: Dana." error={signOffError}>
+      <Field id="sign_off_name" label="Sign your replies as" hint="The name at the end of each draft, for example: Dana." error={signOffError}>
         <Input
           id="sign_off_name"
           name="sign_off_name"

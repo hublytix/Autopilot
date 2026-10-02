@@ -21,7 +21,7 @@ export const ACTION_LINK_MESSAGES = {
   expired: {
     title: 'This draft has expired',
     paragraphs: [
-      'Drafts and lead details are deleted 30 days after the lead arrives (24 hours for test leads), so this reply can no longer be opened.',
+      'Drafts and lead details are deleted 30 days after the lead arrives (24 hours for test leads), so your reply can no longer be opened.',
       'The contact is still in HubSpot.',
     ],
   },
@@ -31,7 +31,7 @@ export const ACTION_LINK_MESSAGES = {
   },
   unavailable: {
     title: 'Something went wrong',
-    paragraphs: ['We could not open this reply just now. Please try the link again in a minute.'],
+    paragraphs: ['We could not open your reply just now. Please try the link again in a minute.'],
   },
 } as const satisfies Record<string, PageMessage>;
 

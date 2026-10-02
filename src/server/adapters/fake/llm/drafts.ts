@@ -47,26 +47,39 @@ function signature(brief: BriefDraft, closing: string, withCompany: boolean): st
   return [closing, name, ...(withCompany && company !== name ? [company] : [])].join('\n');
 }
 
+/** A sentence for what the enquiry asks (from its flags), so drafts differ the way a model's would. */
+function answerFor(flags: readonly DraftFlag[]): string[] {
+  const lines: string[] = [];
+  if (flags.includes('urgent')) lines.push('It sounds like this cannot wait, so we will look at it as soon as we can.');
+  if (flags.includes('asks_pricing')) lines.push('We would need a quick look at the job before we can talk about cost.');
+  return lines;
+}
+
 export function initialDraft(input: DraftInput): DraftOutput {
   const { brief, lead } = input;
   const company = oneLine(brief.company_name);
   const link = bookingLink(brief);
+  const flags = flagsFor(lead);
+  // An empty form message: never claim to have read one (law 5).
+  const hasMessage = (lead.message?.trim() ?? '') !== '';
   const nextStep =
     link !== null
       ? `The quickest next step is to pick a time that suits you here: ${link}`
       : 'The quickest next step is to reply with a couple of times that suit you, and I will get a visit booked in.';
   const body = [
     greeting(lead),
-    `Thanks for getting in touch with ${company}. I have read your message and we would be glad to help.`,
+    hasMessage
+      ? [`Thanks for getting in touch with ${company}. I have read your message and we would be glad to help.`, ...answerFor(flags)].join(' ')
+      : `Thanks for getting in touch with ${company}. Your form came through without a message, so tell me a little about what you need and we will take it from there.`,
     nextStep,
-    'If anything has changed since you wrote, just reply to this email and I will take it from there.',
+    ...(hasMessage ? ['If anything has changed since you wrote, just reply to this email and I will take it from there.'] : []),
     signature(brief, 'Thanks,', true),
   ].join('\n\n');
   return {
     subject: subjectOf(`Thanks for contacting ${company}`),
     body,
     used_booking_link: link !== null,
-    flags: flagsFor(lead),
+    flags,
   };
 }
 

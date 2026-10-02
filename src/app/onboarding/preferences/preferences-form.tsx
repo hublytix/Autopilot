@@ -86,7 +86,7 @@ export function PreferencesForm({ action, initial, ownerEmail, confirmed, timezo
       <fieldset className="flex flex-col gap-3" aria-describedby={mailError === undefined ? 'mail-hint' : 'mail-hint mail-error'}>
         <legend className="mb-1 text-base font-semibold">Which email app do you reply from?</legend>
         <p id="mail-hint" className="text-sm text-neutral-700 dark:text-neutral-300">
-          &ldquo;Send from my email&rdquo; opens a ready reply in this app. You always send it yourself.
+          &ldquo;Send from my email&rdquo; opens your reply, ready to send, in this app. You always send it yourself.
         </p>
         {mailError === undefined ? null : (
           <p id="mail-error" className="text-sm font-medium text-red-700 dark:text-red-400">
@@ -237,7 +237,7 @@ export function PreferencesForm({ action, initial, ownerEmail, confirmed, timezo
       <Field
         id="bcc_address"
         label="Your HubSpot BCC address"
-        hint="If you use HubSpot's BCC address to log emails, enter it here and we'll add it to each reply you open. You can find it in your HubSpot email settings."
+        hint="If you use HubSpot's BCC address to log emails, enter it here and we'll add it to your reply each time you open one. You can find it in your HubSpot email settings."
         optional
         error={bccError}
       >

@@ -1,5 +1,5 @@
 import type { TextareaHTMLAttributes } from 'react';
-import { cn } from '@/components/ui';
+import { cn } from './cn';
 
 // A multi-line text control matching the UI kit's Input (44 px minimum, visible focus ring, error
 // border, aria wiring through `describedBy`).

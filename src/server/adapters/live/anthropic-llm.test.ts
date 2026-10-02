@@ -208,24 +208,6 @@ describe('AnthropicLLM.classify: thrown errors (D-24)', () => {
   });
 });
 
-describe('AnthropicLLM: drafts (prompts arrive in M4)', () => {
-  it('answer fatal_config not_built without calling the API', async () => {
-    const { client, calls } = stub(message());
-    const adapter = llm(client);
-    const lead = { firstName: null, company: null, message: null, formName: 'f' };
-    const briefDraft = {
-      company_name: 'x', one_line: 'x', services: [], who_we_serve: 'x', booking_link: null, tone: { style: 'direct' as const, note: '' },
-      sign_off_name: '', allow_pricing: false, never_promise: [], faqs: [],
-    };
-    expect(await adapter.draft({ brief: briefDraft, lead, previousErrorCodes: [] })).toMatchObject({ failure: 'fatal_config', errorCode: 'not_built' });
-    expect(await adapter.draftFollowUp({ brief: briefDraft, lead, previousErrorCodes: [], followUpNumber: 1, original: null })).toMatchObject({
-      failure: 'fatal_config',
-      errorCode: 'not_built',
-    });
-    expect(calls).toHaveLength(0);
-  });
-});
-
 describe('AnthropicLLM privacy (law 4)', () => {
   it('logs failures with codes only: no lead text, model output or SDK message', async () => {
     const { logger, lines } = capturingLogger();

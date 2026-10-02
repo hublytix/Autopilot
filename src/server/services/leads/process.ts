@@ -1,20 +1,37 @@
 import 'server-only';
+import { errorCode, isPermanent, isRetryable } from '@/server/domain/errors';
 import { isDraftableClassification, isClassification, type Classification, type LeadProcessingState } from '@/server/domain/types';
 import type { Db } from '@/server/db';
 import { JobOutcomes, type JobContext, type JobFailureInfo, type JobOutcome, type JobRow, type Registration } from '@/server/jobs';
 import { log } from '@/server/obs/log';
 import type { Deps } from '@/server/ports';
 import { classifyLead } from '@/server/services/classification';
+import { applyDailyCap, fallbackDraft, generateDraft, type GenerateDraftResult, type NeedsTouchReason } from '@/server/services/drafting';
+import type { NeedsTouchWhy } from '@/emails/NeedsTouch';
+import { NotificationKeys } from '@/server/services/notifications/predicates';
+import { getNotification } from '@/server/services/notifications/reserve';
+import { sendInitialNotification, type InitialNotificationKind, type InitialNotificationResult } from './initial-notification';
+import { registerLeadNotifications } from './notifications';
 
-// The `lead_process` job, M2 part (PLAN §6.2, §8.2, §8.3 step 6, §9.3 steps 1-3, D-32, D-42):
-// re-read the lead, skip it when it can no longer be processed, classify it, then either file it as
-// filtered or hand it to the drafting step. Drafting, the daily cap and the "new lead" email arrive
-// in M4 behind processLeadAfterClassification(); the needs-touch email of the failure path arrives
-// behind sendNeedsTouchAfterFailure().
+// The `lead_process` job (PLAN §6.2, §8.2, §8.3 step 6, §9.3, D-24, D-32, D-36, D-42):
+// 1. re-read the lead, skip it when it can no longer be processed;
+// 2-3. classify it (once), then file it as filtered or go on;
+// 4. the daily cap: over MAX_DRAFTED_LEADS_PER_DAY → `deferred` + one `lead_cap` email a day;
+// 5. the draft (one retry, the validator, the AI budget breaker; the minimal safe template when the
+//    model declines, fails twice, is unavailable, or on the final delivery of a transient error);
+// 6. the `new_lead` (or `needs_touch`) email, whose `sent` transaction sets `notified`,
+//    `first_notified_at` and the two follow-up job rows.
+// The failure path (the final delivery, a permanent error, the failure callback or the sweeper)
+// marks the lead `failed` and sends the needs-touch email with the minimal safe template (no LLM)
+// under the same notification key, so the owner is never left without an email (D-24). A send
+// outage is not a failure: on the final delivery a reserved email still `sending` is left to the
+// sweeper (the job ends done), and the failure path resumes a pending `new_lead` email as it is
+// rather than downgrading it, so its `sent` transaction notifies the lead with its follow-ups.
 //
-// Idempotent under redelivery: the class is stored once (a later delivery reuses it instead of
-// calling the model again), and every lead write is a compare-and-set on `process_rev` and the
-// expected processing states, committed only while this attempt still holds the job.
+// Idempotent under redelivery: the class and the draft are stored once (a later delivery reuses them
+// instead of calling the model again), the email is exactly-once through its reservation (§8.4), and
+// every lead write is a compare-and-set on `process_rev` and the expected processing states,
+// committed only while this attempt still holds the job.
 
 /** PLAN §8.2's dedupe key (without the env prefix) for the job of `processRev`. */
 export function leadProcessDedupeKey(leadId: string, processRev: number): string {
@@ -131,7 +148,7 @@ function skipReasonOf(lead: LeadForProcessing): SkipReason | null {
   return null;
 }
 
-/** The lead as the drafting step (M4) receives it. */
+/** The lead as the drafting step receives it. */
 export interface ClassifiedLead {
   readonly id: string;
   readonly accountId: string;
@@ -141,23 +158,153 @@ export interface ClassifiedLead {
   readonly overridden: boolean;
 }
 
-/**
- * ── M4 SEAM: drafting and the "new lead" email (PLAN §9.3 steps 4-6) ────────────────────────────
- * Runs after the lead is classified as `lead`/`unclear` (or overridden) and stored as `processing`.
- * M4 fills it in: the daily cap (→ `deferred` + one `lead_cap` email), the AI budget breaker, the
- * draft with one retry and the validator, the needs-touch fallback, and the `new_lead`/`needs_touch`
- * reservation whose `sent` transaction sets `notified`, `first_notified_at` and the follow-up jobs.
- * It must stay idempotent (the job may be redelivered after it ran) and will likely need the job
- * context (`isFinalDelivery` for the needs-touch fallback, `assertOwned`). Until then the lead
- * stays `processing` and the job ends `done`.
- */
-export async function processLeadAfterClassification(_deps: Deps, _lead: ClassifiedLead): Promise<JobOutcome> {
-  return JobOutcomes.done();
+/** Bounds the draft calls of one delivery, well inside the job's 6-minute lease. */
+const DRAFT_BUDGET_MS = 4 * 60 * 1000;
+
+/** The needs-touch reason in the owner's words (no codes, law 5). */
+export function needsTouchWhyOf(reason: NeedsTouchReason): NeedsTouchWhy {
+  switch (reason) {
+    case 'refusal':
+      return 'declined';
+    case 'validation_failed':
+    case 'invalid_output':
+    case 'max_tokens':
+      return 'checks';
+    case 'fatal_config':
+    case 'ai_budget':
+      return 'unavailable';
+    case 'transient':
+    case 'job_failed':
+      return 'failed';
+    case 'no_brief':
+      return 'no_brief';
+    case 'earlier_attempt':
+      return 'unknown';
+  }
+}
+
+/** Drafting found the lead or its content gone (privacy deletion, purge) after classification. */
+function isContentGone(error: unknown): boolean {
+  if (!isPermanent(error)) return false;
+  const code = errorCode(error);
+  return code === 'draft_content_missing' || code === 'draft_lead_not_found';
+}
+
+type LateSkipReason = 'content_purged' | 'notification_predicates';
+
+/** The lead can no longer be notified (dismissed, paused, content gone, …): `skipped`, while this attempt holds the job. */
+async function skipLead(deps: Deps, lead: ClassifiedLead, ctx: JobContext, reason: LateSkipReason): Promise<JobOutcome> {
+  await deps.db.tx(async (tx) => {
+    await ctx.assertOwned(tx);
+    await tx.query(`update leads set processing_state = 'skipped' where id = $1 and process_rev = $2 and processing_state = 'processing'`, [
+      lead.id,
+      lead.processRev,
+    ]);
+  });
+  log.info('lead process skipped', { event: 'lead.process_skipped', accountId: lead.accountId, leadId: lead.id, reason });
+  return JobOutcomes.skipped();
+}
+
+/** Maps the email's outcome to the job's. */
+async function outcomeOfNotification(deps: Deps, lead: ClassifiedLead, ctx: JobContext, result: InitialNotificationResult): Promise<JobOutcome> {
+  switch (result.status) {
+    case 'sent':
+    case 'already_sent':
+      return JobOutcomes.done();
+    case 'skipped':
+      // A predicate failed (dismissed, stopped, account paused or disconnected) → no email, as §8.4 says.
+      if (result.reason === 'predicates') return skipLead(deps, lead, ctx, 'notification_predicates');
+      // Another attempt (or the sweeper) holds the reservation and finishes the send.
+      if (result.reason === 'busy') return JobOutcomes.done();
+      return { type: 'permanent', code: `lead_notification_${result.reason}` };
+    case 'failed':
+      // A permanent send error (alerted): the failure path marks the lead failed.
+      return { type: 'permanent', code: 'lead_notification_failed' };
+    case 'unsendable':
+      if (result.problem === 'content_missing' || result.problem === 'lead_missing') return skipLead(deps, lead, ctx, 'content_purged');
+      return { type: 'permanent', code: `lead_notification_${result.problem}` };
+  }
 }
 
 /**
- * The `lead_process` handler (PLAN §9.3 steps 1-3). The integrator registers it with
- * `registerLeadProcessJob` in src/server/jobs/handlers.ts.
+ * PLAN §9.3 steps 4-6, after the lead is classified as `lead`/`unclear` (or overridden) and stored
+ * as `processing`: the daily cap, the draft, the email. Idempotent: a redelivery finds its slot,
+ * its stored draft and its reservation again.
+ */
+export async function processLeadAfterClassification(deps: Deps, lead: ClassifiedLead, ctx: JobContext): Promise<JobOutcome> {
+  const guard = (tx: Db): Promise<void> => ctx.assertOwned(tx);
+
+  // Step 4: the daily cap, counted after classification (D-36).
+  const cap = await applyDailyCap(deps, { accountId: lead.accountId, leadId: lead.id, processRev: lead.processRev, guard });
+  if (cap.type === 'lead_changed') {
+    log.info('lead process skipped', { event: 'lead.process_skipped', accountId: lead.accountId, leadId: lead.id, reason: 'lead_changed' });
+    return JobOutcomes.skipped();
+  }
+  if (cap.type === 'deferred') return JobOutcomes.done();
+
+  // Step 5: the draft; the AI budget breaker is checked before each attempt (D-36).
+  let drafted: GenerateDraftResult;
+  try {
+    drafted = await generateDraft(deps, {
+      accountId: lead.accountId,
+      leadId: lead.id,
+      kind: 'initial',
+      finalDelivery: ctx.isFinalDelivery,
+      signal: AbortSignal.timeout(DRAFT_BUDGET_MS),
+      guard,
+    });
+  } catch (error) {
+    if (isContentGone(error)) return skipLead(deps, lead, ctx, 'content_purged');
+    throw error;
+  }
+
+  // Step 6: the new_lead email, or needs_touch with the draft we have (PLAN §8.4).
+  const notificationKind: InitialNotificationKind = drafted.ok ? 'new_lead' : 'needs_touch';
+  let result: InitialNotificationResult;
+  try {
+    result = await sendInitialNotification(
+      deps,
+      drafted.ok
+        ? { accountId: lead.accountId, leadId: lead.id, processRev: lead.processRev, kind: 'new_lead' }
+        : { accountId: lead.accountId, leadId: lead.id, processRev: lead.processRev, kind: 'needs_touch', why: needsTouchWhyOf(drafted.reason) },
+    );
+  } catch (error) {
+    // A send outage on the final delivery (a Resend blip, or a response lost after the email went
+    // out) is not a failed lead: the reservation stays `sending` with its kind, and the sweeper
+    // resumes it; its `sent` transaction then sets `notified` and the follow-up rows (PLAN §6.2,
+    // §8.4 step 5). Only when the reservation exists, so the owner is never left without an email.
+    if (ctx.isFinalDelivery && isRetryable(error) && (await initialReservationPending(deps, lead))) {
+      log.warn('lead email not sent yet: the sweeper resumes it', {
+        event: 'lead.notification_retry_later',
+        accountId: lead.accountId,
+        leadId: lead.id,
+        notificationKind,
+        errorCode: errorCode(error),
+      });
+      return JobOutcomes.done();
+    }
+    throw error;
+  }
+  log.info('lead email', {
+    event: 'lead.notification',
+    accountId: lead.accountId,
+    leadId: lead.id,
+    draftId: drafted.draft.id,
+    notificationKind,
+    outcome: result.status,
+  });
+  return outcomeOfNotification(deps, lead, ctx, result);
+}
+
+/** The lead's first email is reserved and still `sending` (the job's retry or the sweeper sends it). */
+async function initialReservationPending(deps: Deps, lead: Pick<ClassifiedLead, 'id' | 'processRev'>): Promise<boolean> {
+  const row = await getNotification(deps.db, NotificationKeys.initial(lead.id, lead.processRev));
+  return row !== null && row.status === 'sending';
+}
+
+/**
+ * The `lead_process` handler (PLAN §9.3). The integrator registers it with `registerLeadProcessJob`
+ * in src/server/jobs/handlers.ts.
  */
 export async function leadProcessHandler(deps: Deps, job: JobRow, ctx: JobContext): Promise<JobOutcome> {
   const leadId = leadIdOf(job);
@@ -236,18 +383,32 @@ export async function leadProcessHandler(deps: Deps, job: JobRow, ctx: JobContex
   log.info('lead classified', { ...fields, event: 'lead.classified', outcome: classification, processingState: nextState });
   if (filtered) return JobOutcomes.done();
 
-  return processLeadAfterClassification(deps, { id: lead.id, accountId: lead.accountId, processRev: rev, classification, overridden });
+  return processLeadAfterClassification(deps, { id: lead.id, accountId: lead.accountId, processRev: rev, classification, overridden }, ctx);
 }
 
 /**
- * ── M4 SEAM: the "needs your touch" email of the failure path (PLAN §8.3 step 6, §8.4, D-24) ────
- * Called after the failure path set the lead `failed`. M4 sends the needs-touch email with the
- * minimal safe template through `reserveAndSend` under the initial notification key
- * (`NotificationKeys.initial(leadId, processRev)`, shared with `new_lead`, so a lead gets at most one
- * of the two). It must be idempotent: the failure path can run more than once for a job.
+ * The "needs your touch" email of the failure path (PLAN §8.3 step 6, §8.4, D-24), after the lead was
+ * marked `failed`: the stored draft if one exists, else the minimal safe template (no LLM), under the
+ * initial notification key, taking over an unsent new_lead reservation (a lead gets at most one of
+ * the two). Idempotent: a repeated run finds the reservation `sent` (or takes it over again). A
+ * transient send error leaves the reservation `sending` for the sweeper; it is not rethrown.
  */
-export async function sendNeedsTouchAfterFailure(_deps: Deps, _lead: { id: string; accountId: string; processRev: number }): Promise<void> {
-  // Nothing to send until M4 builds the needs-touch template.
+export async function sendNeedsTouchAfterFailure(deps: Deps, lead: { id: string; accountId: string; processRev: number }): Promise<void> {
+  const fields = { accountId: lead.accountId, leadId: lead.id };
+  try {
+    await fallbackDraft(deps, { accountId: lead.accountId, leadId: lead.id, kind: 'initial' });
+  } catch (error) {
+    if (!isContentGone(error)) throw error;
+    log.info('needs-touch email not possible: the lead content is gone', { ...fields, event: 'lead.needs_touch_unsendable', reason: 'content_purged' });
+    return;
+  }
+  try {
+    const result = await sendInitialNotification(deps, { accountId: lead.accountId, leadId: lead.id, processRev: lead.processRev, kind: 'needs_touch', why: 'failed' });
+    log.info('needs-touch email after a failed job', { ...fields, event: 'lead.needs_touch_after_failure', outcome: result.status });
+  } catch (error) {
+    if (!isRetryable(error)) throw error;
+    log.warn('needs-touch email not sent yet: the sweeper resumes it', { ...fields, event: 'lead.needs_touch_retry_later', errorCode: errorCode(error) });
+  }
 }
 
 /** States the failure path may mark `failed`; `failed` itself is included so a repeated run resumes the email. */
@@ -256,14 +417,63 @@ const FAILABLE_STATES: readonly LeadProcessingState[] = ['new', 'processing', 'f
 const FAILABLE_STATES_IF_OVERRIDDEN: readonly LeadProcessingState[] = ['filtered', 'deferred', 'skipped'];
 
 /**
- * The `lead_process` failure path (PLAN §8.3 step 6): the lead becomes `failed` ("not processed",
- * D-32) unless it already finished (notified, or filtered without an override) or a newer override
- * superseded the job; then the needs-touch email (M4).
+ * The failure path's first question: is the lead's checked draft already on its way? A `new_lead`
+ * reservation still `sending` for a lead still `processing` means an attempt reached the send and
+ * then died or timed out (the email may well be out). That email is resumed as it is, never
+ * downgraded to "something went wrong": its `sent` transaction marks the lead `notified` and writes
+ * the follow-up rows, whether the send goes out now or Resend answers 409 for the earlier one.
+ * True when the failure path has nothing more to do.
+ */
+async function resumePendingNewLead(deps: Deps, leadId: string, rev: number | null): Promise<boolean> {
+  const lead = await deps.db.maybeOne<{ account_id: string; process_rev: number }>(
+    `select account_id, process_rev from leads
+      where id = $1 and process_rev = coalesce($2::int, process_rev) and processing_state = 'processing'`,
+    [leadId, rev],
+  );
+  if (lead === null) return false;
+  const reservation = await getNotification(deps.db, NotificationKeys.initial(leadId, lead.process_rev));
+  if (reservation === null || reservation.status !== 'sending' || reservation.kind !== 'new_lead') return false;
+  const fields = { accountId: lead.account_id, leadId };
+  let result: InitialNotificationResult;
+  try {
+    result = await sendInitialNotification(deps, { accountId: lead.account_id, leadId, processRev: lead.process_rev, kind: 'new_lead' });
+  } catch (error) {
+    if (!isRetryable(error)) return false;
+    log.warn('lead email not sent yet: the sweeper resumes it', { ...fields, event: 'lead.notification_retry_later', notificationKind: 'new_lead', errorCode: errorCode(error) });
+    return true;
+  }
+  log.info('pending lead email resumed by the failure path', { ...fields, event: 'lead.notification_resumed', notificationKind: 'new_lead', outcome: result.status });
+  switch (result.status) {
+    case 'sent':
+    case 'already_sent':
+      return true;
+    case 'skipped':
+      if (result.reason === 'busy') return true;
+      if (result.reason === 'predicates') {
+        await deps.db.query(`update leads set processing_state = 'skipped' where id = $1 and process_rev = $2 and processing_state = 'processing'`, [
+          leadId,
+          lead.process_rev,
+        ]);
+        return true;
+      }
+      return false;
+    case 'failed':
+    case 'unsendable':
+      return false;
+  }
+}
+
+/**
+ * The `lead_process` failure path (PLAN §8.3 step 6): a pending new_lead email is resumed as it is
+ * (above); otherwise the lead becomes `failed` ("not processed", D-32) unless it already finished
+ * (notified, or filtered without an override) or a newer override superseded the job; then the
+ * needs-touch email.
  */
 export async function leadProcessFailurePath(deps: Deps, job: JobRow, info: JobFailureInfo): Promise<void> {
   const leadId = leadIdOf(job);
   if (leadId === null) return;
   const rev = jobProcessRev(job);
+  if (await resumePendingNewLead(deps, leadId, rev)) return;
   const row = await deps.db.maybeOne<{ id: string; account_id: string; process_rev: number }>(
     `update leads set processing_state = 'failed'
       where id = $1
@@ -281,8 +491,12 @@ export async function leadProcessFailurePath(deps: Deps, job: JobRow, info: JobF
   await sendNeedsTouchAfterFailure(deps, { id: row.id, accountId: row.account_id, processRev: row.process_rev });
 }
 
-/** Wiring for src/server/jobs/handlers.ts (REGISTRATIONS): the handler and its failure path. */
-export const registerLeadProcessJob: Registration = ({ jobs }) => {
-  jobs.register('lead_process', leadProcessHandler);
-  jobs.registerFailurePath('lead_process', leadProcessFailurePath);
+/**
+ * Wiring for src/server/jobs/handlers.ts (REGISTRATIONS): the handler, its failure path, and the
+ * resumers of the lead emails (new_lead, needs_touch, follow_up, reply_detected).
+ */
+export const registerLeadProcessJob: Registration = (registries) => {
+  registries.jobs.register('lead_process', leadProcessHandler);
+  registries.jobs.registerFailurePath('lead_process', leadProcessFailurePath);
+  registerLeadNotifications(registries);
 };

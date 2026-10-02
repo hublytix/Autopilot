@@ -32,12 +32,12 @@ const button: CSSProperties = {
 
 export function BillingInactive({ productName, billingUrl }: BillingInactiveProps) {
   return (
-    <Layout productName={productName} preview={`${productName} has stopped drafting replies.`}>
+    <Layout productName={productName} preview={`${productName} has stopped drafting your replies.`}>
       <Heading as="h1" style={heading}>
         {productName} has stopped
       </Heading>
       <Text style={paragraph}>
-        Your free trial has ended or your subscription isn&apos;t active, so {productName} has stopped drafting replies
+        Your free trial has ended or your subscription isn&apos;t active, so {productName} has stopped drafting your replies
         for new leads. Leads that arrive while it is stopped won&apos;t be drafted later.
       </Text>
       <Text style={paragraph}>Your settings and brief are kept. To start again, subscribe or update your payment method.</Text>

@@ -47,6 +47,8 @@ describe('file layout', () => {
     'src/app/a/[token]/beacon/route.ts',
     'src/app/a/[token]/copy/page.tsx',
     'src/app/a/[token]/verify-notify/page.tsx',
+    'src/app/a/[token]/edit/page.tsx',
+    'src/app/a/[token]/dismiss/page.tsx',
     'src/server/security/ssrf.ts',
     'src/server/security/csp.ts',
     'src/server/security/same-origin.ts',

@@ -123,14 +123,14 @@ function directContext(job: JobRow, assertOwned: JobContext['assertOwned'] = asy
 }
 
 describe('lead_process: classification', () => {
-  it('stores a genuine enquiry as lead / processing with classified_at, and the job ends done', async () => {
+  it('stores a genuine enquiry as lead with classified_at, then drafts and notifies it, and the job ends done', async () => {
     const db = getDb();
     const leadId = await seedLead(db);
     const job = await scheduleProcessJob(db, leadId);
 
     expect(await run(job)).toEqual({ status: 200, outcome: 'done' });
 
-    expect(await leadState(db, leadId)).toEqual({ processing_state: 'processing', classification: 'lead', classified_at: rig.clock.now(), process_rev: 0 });
+    expect(await leadState(db, leadId)).toEqual({ processing_state: 'notified', classification: 'lead', classified_at: rig.clock.now(), process_rev: 0 });
     expect((await getJob(db, job.id))?.status).toBe('done');
     expect(await aiCallCount(db)).toBe(1);
   });
@@ -150,7 +150,7 @@ describe('lead_process: classification', () => {
     ['a vendor pitch', 'We offer SEO services to get you on the first page of Google', 'vendor_pitch', 'filtered'],
     ['a job seeker', 'I am looking for a job as an apprentice plumber, CV attached', 'job_seeker', 'filtered'],
     ['a support request', 'Where is my order? The invoice number is 42', 'support_request', 'filtered'],
-    ['an empty message', null, 'unclear', 'processing'],
+    ['an empty message', null, 'unclear', 'notified'],
   ])('files %s as %s / %s', async (_label, message, classification, state) => {
     const db = getDb();
     const leadId = await seedLead(db, { message });
@@ -158,12 +158,12 @@ describe('lead_process: classification', () => {
     expect(await leadState(db, leadId)).toMatchObject({ classification, processing_state: state, classified_at: rig.clock.now() });
   });
 
-  it('a classifier failure becomes unclear and the lead is still processed', async () => {
+  it('a classifier failure becomes unclear and the lead is still drafted and notified', async () => {
     const db = getDb();
     rig.fakes.llm.injectFault('transient', { purpose: 'classify' });
     const leadId = await seedLead(db);
     expect(await run(await scheduleProcessJob(db, leadId))).toEqual({ status: 200, outcome: 'done' });
-    expect(await leadState(db, leadId)).toMatchObject({ classification: 'unclear', processing_state: 'processing' });
+    expect(await leadState(db, leadId)).toMatchObject({ classification: 'unclear', processing_state: 'notified' });
   });
 
   it('a redelivery after the lead was stored reuses the class and makes no second model call', async () => {
@@ -252,7 +252,7 @@ describe('lead_process: owner override', () => {
 
     expect(await run(await scheduleProcessJob(db, leadId, 1))).toEqual({ status: 200, outcome: 'done' });
 
-    expect(await leadState(db, leadId)).toEqual({ processing_state: 'processing', classification: 'spam', classified_at: classifiedAt, process_rev: 1 });
+    expect(await leadState(db, leadId)).toEqual({ processing_state: 'notified', classification: 'spam', classified_at: classifiedAt, process_rev: 1 });
     expect(rig.fakes.llm.callsFor('classify')).toHaveLength(0);
   });
 
@@ -260,7 +260,7 @@ describe('lead_process: owner override', () => {
     const db = getDb();
     const leadId = await seedLead(db, { message: 'Guest post offer', processRev: 1 });
     expect(await run(await scheduleProcessJob(db, leadId, 1))).toEqual({ status: 200, outcome: 'done' });
-    expect(await leadState(db, leadId)).toMatchObject({ processing_state: 'processing', classification: 'spam' });
+    expect(await leadState(db, leadId)).toMatchObject({ processing_state: 'notified', classification: 'spam' });
   });
 
   it('an override job on a paused account marks the filtered lead skipped', async () => {

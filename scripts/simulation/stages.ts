@@ -4,10 +4,14 @@
 //   M1  boot      fakes + in-memory PGlite (migrated) + FakeClock, fixture portal loaded; no checks
 //   M3  pre-run   the real onboarding 09:00–09:04:30 through the route handlers, page views and
 //                 action bodies (replaced M2's seed helper); background done by 09:06
-//   M2  day-0     submissions #1-#6 from 10:00, webhooks and cron polls; intake + classification checks
-//   M4+ day 0 emails, day 1 … Wednesday (PLAN §13 calendar), inserted before `test-lead`
+//   M2  day-0     submissions #1-#6 from 10:00, webhooks and cron polls; intake + classification checks;
+//                 since M4 also the drafts, the 4 new_lead emails and the owner's Send taps (10:12, 10:30, 10:40)
+//   M4  day-0-emails  10:42 edit link (GET + POST), 10:43 dismiss link (GET; the test lead dismissed),
+//                 10:44 every link resolves; at 10:45 the emails, clicks, follow-up rows and statuses
+//   M5+ day 1 … Wednesday (PLAN §13 calendar), inserted before `test-lead`
 //   M3  test-lead the onboarding test lead's exclusions, checked last
 import { runDay0 } from './day0';
+import { runDay0Emails } from './day0-emails';
 import { runPreRun } from './pre-run';
 import { checkTestLeadExclusions } from './test-lead';
 import type { Simulation, Stage } from './types';
@@ -54,6 +58,13 @@ const day0: Stage = {
   run: runDay0,
 };
 
+/** Day 0's emails and action links (PLAN §13 Day 0 row, §15 M4 "new_lead ×4; all three action links work; clicks recorded"). */
+const day0Emails: Stage = {
+  id: 'day-0-emails',
+  milestone: 'M4',
+  run: runDay0Emails,
+};
+
 export const BOOT_STAGE: Stage = boot;
 
 const testLead: Stage = {
@@ -62,4 +73,4 @@ const testLead: Stage = {
   run: checkTestLeadExclusions,
 };
 
-export const STAGES: readonly Stage[] = [boot, preRun, day0, testLead];
+export const STAGES: readonly Stage[] = [boot, preRun, day0, day0Emails, testLead];

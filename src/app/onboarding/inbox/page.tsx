@@ -332,7 +332,7 @@ export default async function OnboardingInboxPage({ searchParams }: { searchPara
     <Page
       width="wide"
       title="Check your email logging"
-      description={`${productName} can only see replies that HubSpot logs, so let's check your email is logged.`}
+      description={`${productName} can only see replies from leads that HubSpot logs, so let's check your email is logged.`}
     >
       {alert === undefined ? null : <Alert tone={alert.tone}>{alert.text}</Alert>}
       <HistoryCard check={view.check} />
