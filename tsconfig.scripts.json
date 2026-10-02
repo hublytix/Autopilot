@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "plugins": [],
+    "paths": {
+      "@/*": ["./src/*"],
+      "server-only": ["./test/stubs/empty.ts"]
+    }
+  },
+  "include": ["scripts/**/*.ts", "src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx"],
+  "exclude": ["node_modules", ".next", "outbox", ".data", "coverage"]
+}

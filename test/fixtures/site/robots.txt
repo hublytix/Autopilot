@@ -1,0 +1,9 @@
+# Brightside Plumbing (fictional fixture site for the fake WebFetcher; PLAN §4, §12)
+User-agent: *
+Disallow: /private
+Disallow: /admin/
+
+User-agent: GreedyScraper
+Disallow: /
+
+Sitemap: https://brightside-plumbing.example/sitemap.xml

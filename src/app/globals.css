@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light dark;
+}
+
+/* Visible keyboard focus everywhere, in both colour schemes. */
+:where(a, button, input, select, textarea, summary):focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}

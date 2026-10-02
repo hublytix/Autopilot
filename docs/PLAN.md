@@ -1,11 +1,11 @@
 # Hublytix Autopilot v1: build plan
 
-Status: **PLAN, revision 5 (after four plan-review rounds), awaiting approval.** Reply `approve` to start EXECUTE at M1.
+Status: **PLAN, revision 5 (after four plan-review rounds). Approved by the owner on 2026-10-02; EXECUTE in progress.**
 
 Inputs:
 - `docs/BUILD_BRIEF.md`: the specification.
 - `docs/RESEARCH.md`: the verified facts. DECISIONS cites them by finding ID in [brackets]; full evidence is in `docs/research/*.md`.
-- `docs/DECISIONS.md`: D-01…D-52, every deviation from the brief and every choice where the brief is silent.
+- `docs/DECISIONS.md`: D-01…D-53, every deviation from the brief and every choice where the brief is silent.
 
 ---
 
@@ -191,7 +191,7 @@ The first migration is `supabase/migrations/20261001000001_init.sql`. Later mile
 | `selected_forms` | pk `(account_id, form_id)`, `form_name`, `form_type`, `selected`, `newsletter_detected`, `intake_floor_at not null`, `cursor_submitted_at not null` | none |
 | `leads` | `account_id`, `hubspot_contact_id text` (`check (is_test or hubspot_contact_id is not null)`), `form_id`, `submitted_at`, `conversion_id`, `submission_key` (HMAC; nulled at purge), `intake_trigger (webhook\|cron\|inbox_check)`, `is_test`, `classification`, `classification_override`, `processing_state (new\|processing\|notified\|filtered\|deferred\|failed\|skipped)`, `process_rev`, `followup_stream`, `needs_touch`, `stop_reason`, `replies_ignored_before`. Timeline: `received_at`, `classified_at`, `first_notified_at`, `first_send_clicked_at`, `send_confirmed_at` (HubSpot time), `replied_at` (HubSpot time), `dismissed_at`, `fu1_notified_at`, `fu2_notified_at`, `signals_checked_at`. **Unique** `(account_id, hubspot_contact_id, submitted_at)` and `(account_id, form_id, submission_key)` | none |
 | `lead_messages` | `lead_id pk`, `account_id`, `message`, `first_name`, `last_name`, `company`, `email`, `purge_at` (+30 d; test lead +24 h). Inserted only in a CTE chained to the lead insert | **yes** |
-| `drafts` | `lead_id`, `kind (initial\|fu1\|fu2)`, `subject`, `body`, `flags` (closed-enum `text[]`), `used_booking_link`, `validation_ok`, `validation_errors` (codes), `attempts`, `needs_touch`, `model`, token totals, `cost_micro_usd`, `purge_at` (= lead `purge_at`), `purged_at`; unique `(lead_id, kind)` | **yes** (subject, body and flags nulled at purge) |
+| `drafts` | `lead_id`, `kind (initial\|fu1\|fu2)`, `subject`, `body`, `flags` (closed-enum `text[]`), `used_booking_link`, `validation_ok`, `validation_errors` (codes), `attempts`, `needs_touch`, `model`, token totals, `cost_micro_usd`, `purge_at` (= lead `purge_at`), `purged_at`; unique `(lead_id, kind)` | **yes** (subject and body nulled, flags emptied to `'{}'`, at purge; §9.10) |
 | `action_tokens` | `token_hash text unique` (sha256 hex of 32 random bytes), `account_id`, `lead_id`, `draft_id`, `notification_key`, `purpose (send\|edit\|dismiss\|verify_notify)`, `expires_at`, `first_used_at`, `use_count`, `revoked_at` | none |
 | `scheduled_jobs` | `account_id`, `lead_id`, `kind (portal_poll\|lead_process\|followup\|weekly_report\|baseline\|brief_generate\|inbox_check\|privacy_delete\|account_daily)`, `seq`, `dedupe_key unique`, `payload jsonb` (ids only), `run_at`, `status (scheduled\|running\|done\|cancelled\|skipped\|failed)`, `external_id`, `published_at`, `hops int`, `attempts`, `attempt_id`, `lease_until`, `last_error_code`, `cancel_reason`, `created_at` (logical), `finished_at` | none |
 | `notifications_sent` | `dedupe_key unique`, `account_id`, `lead_id`, `kind`, `status (sending\|sent\|failed)`, `provider_message_id`, `recipients_count`, `first_reserved_at` (never reset), `reserved_at`, `send_attempts`, `sweeper_resumes`, `sent_at` | none |
@@ -702,7 +702,7 @@ Every query binds `$now`. The DB-local steps also run from the 5-minute cron thr
     - Compose URLs, tokens and content are never logged.
 11. **Abuse limits:** rate limits, daily drafted-lead cap, AI budget breaker, brief-generation limit, notify-address verification (D-36, D-46).
 12. **Fake mode can't reach production** (D-29).
-13. **No secrets in client bundles:** a CI step greps `.next/static` for secret-like strings and the names of server-only environment variables.
+13. **No secrets in client bundles:** a CI step greps `.next/static` and the prerendered HTML/RSC payloads under `.next/server` for secret-like strings, secret values from the environment and `.env*` files, and the names of server-only environment variables.
 
 ---
 
@@ -929,6 +929,7 @@ Every milestone ends with:
 - [ ] Classification (Haiku params, `toClaudeJsonSchema`, lowercase enums, failure → `unclear`, `ai_calls`) + live `AnthropicLLM`; FakeLLM parameter assertion
 - [ ] Simulation seed helper that creates an active account directly (forms selected, floors, `onboarding_completed_at`); M3 replaces it with the real onboarding
 - [ ] Simulation stage 2: 6 leads (#5 via `cron`), 2 filtered, no historical leads
+- [ ] Carried over from the M1 review: the `privacy_delete` handler empties draft flags (`flags = '{}'`; the column is NOT NULL, §9.10 step 2); fake mode persists the `FakeHubSpot` and `FakeBilling` snapshots in `fake.state` on every change and reloads them at boot (container test: two boots on one `FAKE_DB_DIR` see the same portal tokens); the QStash `Receiver` is always built with explicit `currentSigningKey`/`nextSigningKey` and `devMode: false`; the `/api/cron/*` handlers match the schedules already in `vercel.json`
 
 ### M3: brief builder, onboarding, inbox check, baseline
 - [ ] `HttpWebFetcher` with the SSRF guard, robots parser, page selection and ranking, per-page timeout, parallel crawl, nav/script/hidden-DOM stripping (tests on `test/fixtures/site`); `brief_generate` job with the LLM timeout and fallback; brief editor and versions; booking-link rules

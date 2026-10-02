@@ -1,0 +1,228 @@
+{
+  "$comment": "Fictional simulation portal for FakeHubSpot (PLAN §4, §13). Every name, company, address and message is invented; the domains are reserved example names. Times are ISO-8601 UTC. Baseline history: five genuine enquiries between 2026-09-10 and 2026-09-30; four got a logged outbound EMAIL 30 m, 2 h, 5 h and 26 h after the submission (median 3 h 30 m), one got none (20%).",
+  "portal": {
+    "portalId": "1234567",
+    "appId": "7100001",
+    "accountType": "STANDARD",
+    "timeZone": "America/New_York",
+    "uiDomain": "app.hubspot.com",
+    "dataHostingLocation": "na1",
+    "hubDomain": "brightside-plumbing.example",
+    "installerEmail": "owner@brightside-plumbing.example",
+    "ownerTestAddress": "owner.personal@example.net",
+    "grantedScopes": ["oauth", "crm.objects.contacts.read", "forms", "sales-email-read"]
+  },
+  "mailboxes": [{ "email": "owner@brightside-plumbing.example", "loggingMode": "log_all" }],
+  "forms": [
+    {
+      "id": "b1f0c6a2-3d4e-4f50-8a61-7b2c9d0e1f01",
+      "name": "Contact us",
+      "formType": "hubspot",
+      "archived": false,
+      "fields": [
+        { "name": "firstname", "fieldType": "single_line_text", "hidden": false, "objectTypeId": "0-1" },
+        { "name": "lastname", "fieldType": "single_line_text", "hidden": false, "objectTypeId": "0-1" },
+        { "name": "email", "fieldType": "email", "hidden": false, "objectTypeId": "0-1" },
+        { "name": "company", "fieldType": "single_line_text", "hidden": false, "objectTypeId": "0-1" },
+        { "name": "message", "fieldType": "multi_line_text", "hidden": false, "objectTypeId": "0-1" }
+      ],
+      "lifecycleStages": ["lead"],
+      "hasSubscriptionConsent": false,
+      "submitButtonText": "Send message",
+      "pageUrl": "https://brightside-plumbing.example/contact"
+    },
+    {
+      "id": "b1f0c6a2-3d4e-4f50-8a61-7b2c9d0e1f02",
+      "name": "Request a quote",
+      "formType": "hubspot",
+      "archived": false,
+      "fields": [
+        { "name": "firstname", "fieldType": "single_line_text", "hidden": false, "objectTypeId": "0-1" },
+        { "name": "lastname", "fieldType": "single_line_text", "hidden": false, "objectTypeId": "0-1" },
+        { "name": "email", "fieldType": "email", "hidden": false, "objectTypeId": "0-1" },
+        { "name": "company", "fieldType": "single_line_text", "hidden": false, "objectTypeId": "0-1" },
+        { "name": "message", "fieldType": "multi_line_text", "hidden": false, "objectTypeId": "0-1" }
+      ],
+      "lifecycleStages": ["lead"],
+      "hasSubscriptionConsent": false,
+      "submitButtonText": "Request my quote",
+      "pageUrl": "https://brightside-plumbing.example/quote"
+    },
+    {
+      "id": "b1f0c6a2-3d4e-4f50-8a61-7b2c9d0e1f03",
+      "name": "Newsletter signup",
+      "formType": "hubspot",
+      "archived": false,
+      "fields": [{ "name": "email", "fieldType": "email", "hidden": false, "objectTypeId": "0-1" }],
+      "lifecycleStages": ["subscriber"],
+      "hasSubscriptionConsent": true,
+      "submitButtonText": "Subscribe",
+      "pageUrl": "https://brightside-plumbing.example/tips"
+    }
+  ],
+  "contacts": [
+    {
+      "id": "101",
+      "createdAt": "2026-09-10T14:12:00Z",
+      "properties": {
+        "email": "maya.okafor@example.com",
+        "firstname": "Maya",
+        "lastname": "Okafor",
+        "company": "Okafor Bakery",
+        "message": "Hi, the water heater in the back room of our bakery is leaking from the bottom. Could someone come and look at it this week?",
+        "hs_sales_email_last_replied": "2026-09-10T16:02:00.000Z"
+      }
+    },
+    {
+      "id": "102",
+      "createdAt": "2026-09-15T13:30:00Z",
+      "properties": {
+        "email": "tom.reyes@example.org",
+        "firstname": "Tom",
+        "lastname": "Reyes",
+        "message": "We'd like a price to replace two bathroom faucets and the shower valve in our 1990s house."
+      }
+    },
+    {
+      "id": "103",
+      "createdAt": "2026-09-19T17:45:00Z",
+      "properties": {
+        "email": "priya.natarajan@example.net",
+        "firstname": "Priya",
+        "lastname": "Natarajan",
+        "company": "Natarajan Family Dental",
+        "message": "The toilet in our office keeps running and the shut-off valve is stuck. Can you fit us in early next week?"
+      }
+    },
+    {
+      "id": "104",
+      "createdAt": "2026-09-24T19:05:00Z",
+      "properties": {
+        "email": "sam.kowalski@example.com",
+        "firstname": "Sam",
+        "lastname": "Kowalski",
+        "message": "We're finishing our basement and need a quote to rough in plumbing for a new half bath."
+      }
+    },
+    {
+      "id": "105",
+      "createdAt": "2026-09-29T15:20:00Z",
+      "properties": {
+        "email": "lena.fischer@example.org",
+        "firstname": "Lena",
+        "lastname": "Fischer",
+        "message": "Water pressure on our whole second floor has been low since last weekend. Is this something you can diagnose?"
+      }
+    }
+  ],
+  "submissions": [
+    {
+      "formId": "b1f0c6a2-3d4e-4f50-8a61-7b2c9d0e1f01",
+      "conversionId": "5e0d7c1a-9b2f-4c3e-8d4a-000000000101",
+      "submittedAt": "2026-09-10T14:12:00Z",
+      "pageUrl": "https://brightside-plumbing.example/contact",
+      "values": [
+        { "name": "firstname", "value": "Maya", "objectTypeId": "0-1" },
+        { "name": "lastname", "value": "Okafor", "objectTypeId": "0-1" },
+        { "name": "email", "value": "maya.okafor@example.com", "objectTypeId": "0-1" },
+        { "name": "company", "value": "Okafor Bakery", "objectTypeId": "0-1" },
+        { "name": "message", "value": "Hi, the water heater in the back room of our bakery is leaking from the bottom. Could someone come and look at it this week?", "objectTypeId": "0-1" }
+      ]
+    },
+    {
+      "formId": "b1f0c6a2-3d4e-4f50-8a61-7b2c9d0e1f02",
+      "conversionId": "5e0d7c1a-9b2f-4c3e-8d4a-000000000102",
+      "submittedAt": "2026-09-15T13:30:00Z",
+      "pageUrl": "https://brightside-plumbing.example/quote",
+      "values": [
+        { "name": "firstname", "value": "Tom", "objectTypeId": "0-1" },
+        { "name": "lastname", "value": "Reyes", "objectTypeId": "0-1" },
+        { "name": "email", "value": "tom.reyes@example.org", "objectTypeId": "0-1" },
+        { "name": "message", "value": "We'd like a price to replace two bathroom faucets and the shower valve in our 1990s house.", "objectTypeId": "0-1" }
+      ]
+    },
+    {
+      "formId": "b1f0c6a2-3d4e-4f50-8a61-7b2c9d0e1f01",
+      "conversionId": "5e0d7c1a-9b2f-4c3e-8d4a-000000000103",
+      "submittedAt": "2026-09-19T17:45:00Z",
+      "pageUrl": "https://brightside-plumbing.example/contact",
+      "values": [
+        { "name": "firstname", "value": "Priya", "objectTypeId": "0-1" },
+        { "name": "lastname", "value": "Natarajan", "objectTypeId": "0-1" },
+        { "name": "email", "value": "priya.natarajan@example.net", "objectTypeId": "0-1" },
+        { "name": "company", "value": "Natarajan Family Dental", "objectTypeId": "0-1" },
+        { "name": "message", "value": "The toilet in our office keeps running and the shut-off valve is stuck. Can you fit us in early next week?", "objectTypeId": "0-1" }
+      ]
+    },
+    {
+      "formId": "b1f0c6a2-3d4e-4f50-8a61-7b2c9d0e1f02",
+      "conversionId": "5e0d7c1a-9b2f-4c3e-8d4a-000000000104",
+      "submittedAt": "2026-09-24T19:05:00Z",
+      "pageUrl": "https://brightside-plumbing.example/quote",
+      "values": [
+        { "name": "firstname", "value": "Sam", "objectTypeId": "0-1" },
+        { "name": "lastname", "value": "Kowalski", "objectTypeId": "0-1" },
+        { "name": "email", "value": "sam.kowalski@example.com", "objectTypeId": "0-1" },
+        { "name": "message", "value": "We're finishing our basement and need a quote to rough in plumbing for a new half bath.", "objectTypeId": "0-1" }
+      ]
+    },
+    {
+      "formId": "b1f0c6a2-3d4e-4f50-8a61-7b2c9d0e1f01",
+      "conversionId": "5e0d7c1a-9b2f-4c3e-8d4a-000000000105",
+      "submittedAt": "2026-09-29T15:20:00Z",
+      "pageUrl": "https://brightside-plumbing.example/contact",
+      "values": [
+        { "name": "firstname", "value": "Lena", "objectTypeId": "0-1" },
+        { "name": "lastname", "value": "Fischer", "objectTypeId": "0-1" },
+        { "name": "email", "value": "lena.fischer@example.org", "objectTypeId": "0-1" },
+        { "name": "message", "value": "Water pressure on our whole second floor has been low since last weekend. Is this something you can diagnose?", "objectTypeId": "0-1" }
+      ]
+    }
+  ],
+  "emails": [
+    {
+      "id": "60001",
+      "direction": "EMAIL",
+      "timestamp": "2026-09-10T14:42:00Z",
+      "status": "SENT",
+      "from": "owner@brightside-plumbing.example",
+      "to": ["maya.okafor@example.com"],
+      "contactIds": ["101"]
+    },
+    {
+      "id": "60002",
+      "direction": "INCOMING_EMAIL",
+      "timestamp": "2026-09-10T16:02:00Z",
+      "from": "maya.okafor@example.com",
+      "to": ["owner@brightside-plumbing.example"],
+      "contactIds": ["101"]
+    },
+    {
+      "id": "60003",
+      "direction": "EMAIL",
+      "timestamp": "2026-09-15T15:30:00Z",
+      "status": "SENT",
+      "from": "owner@brightside-plumbing.example",
+      "to": ["tom.reyes@example.org"],
+      "contactIds": ["102"]
+    },
+    {
+      "id": "60004",
+      "direction": "EMAIL",
+      "timestamp": "2026-09-19T22:45:00Z",
+      "status": "SENT",
+      "from": "owner@brightside-plumbing.example",
+      "to": ["priya.natarajan@example.net"],
+      "contactIds": ["103"]
+    },
+    {
+      "id": "60005",
+      "direction": "EMAIL",
+      "timestamp": "2026-09-25T21:05:00Z",
+      "status": "SENT",
+      "from": "owner@brightside-plumbing.example",
+      "to": ["sam.kowalski@example.com"],
+      "contactIds": ["104"]
+    }
+  ]
+}

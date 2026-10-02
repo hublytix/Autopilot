@@ -93,7 +93,7 @@ These six entries change something the brief states outright, or interpret one o
   - It is processed for **every known portal**, whatever its status.
   - It is recorded and handed to a durable `privacy_delete` job, which:
     - deletes `lead_messages`;
-    - nulls draft `subject`, `body` and `flags`;
+    - nulls draft `subject` and `body` and empties `flags` (`'{}'`: the column is NOT NULL, PLAN §9.10 step 2; see D-53);
     - replaces `submission_key` with a random value;
     - revokes the leads' action tokens;
     - cancels jobs;
@@ -679,7 +679,7 @@ These six entries change something the brief states outright, or interpret one o
   - a daily job re-encrypts rows that don't use the current kid;
   - `TOKEN_ENCRYPTION_KEY_PREVIOUS` is used for decryption only;
   - `HUBSPOT_CLIENT_SECRET_PREVIOUS` is used for webhook verification only.
-- **Per-purpose keys:** derived with HKDF(`APP_SECRET`) for `state`, `pending`, `ratelimit`, `dedupe` and `fake-session`.
+- **Per-purpose keys:** derived with HKDF-SHA256(`APP_SECRET`, empty salt, info `hublytix-autopilot/v1/<purpose>`) for `state`, `pending`, `ratelimit`, `dedupe` and `fake-session`. The versioned info lets a future key schedule move to `/v2/`. There is no `action` key: action tokens are random and stored as plain sha256 hashes (D-45).
 - **`env.ts` asserts:**
   - each key decodes to 32 bytes;
   - current ≠ previous;
@@ -688,3 +688,21 @@ These six entries change something the brief states outright, or interpret one o
 ### D-52 · REVIEW verdicts: PASS / PARTIAL / FAIL (brief change)
 - **Decision:** REVIEW reports each Definition-of-Done line as PASS, PARTIAL or FAIL. PARTIAL means the line rests on evidence that is only community- or knowledge-base-level, and it names the PLAN §17 live check that will settle it.
 - **Why:** brief §0.1 asks for "pass/fail per line", but some facts can only be confirmed against live accounts, which this sandbox has none of (brief §0.3). Reporting them as PASS would overstate (law 3).
+
+### D-53 · M1 review fixes: build choices and recorded discrepancies
+- **Discrepancies settled:**
+  - PLAN §5 said draft `flags` are nulled at purge, PLAN §9.10 step 2 and the schema empty them (`flags='{}'`, NOT NULL). §9.10 wins; PLAN §5 and D-06 now say "emptied", and the M2 checklist carries it for the `privacy_delete` handler.
+  - The M1 build had an `action` HKDF purpose that D-51 does not list; it was removed (action tokens are unkeyed sha256 hashes, D-45). The HKDF info gained an app and version prefix (D-51).
+  - `vercel.json` (PLAN §3, §8.1) lands in M1 with the three cron schedules; the routes arrive in M2, M6 and M7.
+- **Boundaries:** the PLAN §3 rules are enforced twice: the regex `no-restricted-imports` rules on the raw specifier, and a local rule (`autopilot/import-boundaries`, in `eslint.config.mjs`) that resolves `@/`, `./`, `../` and inner `..` to a repo path, checks `import()`, `require()` and re-exports, and refuses non-canonical specifiers. `import type` stays allowed everywhere. `src/proxy.ts` may import only `next/server`, the CSP builder, the AuthProvider adapters and `shared/`. Disabling a guard inline is refused by a test.
+- **Time (D-28):** lint also bans `Date` as a bare value, `performance.now()`/`timeOrigin` and the Luxon calls that fill in "now". Every container points Luxon's `Settings.now` at its Clock; Vitest pins it to a fixed year-2000 instant (`test/setup/luxon-clock.ts`), so an implicit "now" never depends on the day the suite runs. The SQL scan also flags `'today'`/`'tomorrow'`/`'yesterday'` and one-argument `age()`, and covers `scripts/`.
+- **Fake mode clock:** dev runs on `DevClock`: the wall clock plus an offset persisted in `fake.state` (`clock_offset_ms`), so a restart keeps the simulated time. Persisting the fake portal and billing snapshots arrives with OAuth token storage in M2.
+- **Fake mode reachable by others** (a Vercel production/preview deployment, or an `APP_URL` that is not loopback): `APP_SECRET` and `TOKEN_ENCRYPTION_KEY` must be set to real, non-fake values, because the fake ones are public and the fake session cookie key derives from `APP_SECRET`. The `/dev` routes must then also sit behind Vercel deployment protection.
+- **Live-mode refusals added:** the public QStash dev token, `QSTASH_REGION` and any region-prefixed QStash variable (the SDK would pick unvalidated keys per request), `SENTRY_SPOTLIGHT` and `SENTRY_DEBUG`.
+- **PGlite shim:** a fresh database starts like a pre-2026 Supabase project, with the legacy default grants to `anon`, `authenticated` and `service_role` in `public` (SB-DATA-API-GRANTS-2026), applied only while the migration ledger is empty. The migration test therefore proves the migration's revokes do the work, with mutation tests showing each kind of revoke is needed.
+- **Settings constraints:** `notify_emails` holds 1–3 addresses once `preferences_saved_at` is set (empty only before), and `notify_emails_verified ⊆ notify_emails` (D-46).
+- **Sentry:** exception values and breadcrumb messages survive only as snake_case error codes that `redact()` leaves unchanged; `server_name` is dropped; `spotlight`, `debug`, `includeServerName` and `enhanceFetchErrorMessages` are pinned off; the session and Spotlight integrations are removed (session envelopes bypass `beforeSend`).
+- **Crypto:** `encrypt`/`decrypt` refuse an AAD that is not `<table>:<row id>:<column>` (`crypto_bad_aad`); a fixed IV source exists only in `createTokenCipherForTest`, refused outside `NODE_ENV=test`. Signed cookies are compared as canonical base64url text.
+- **Fakes match vendor rules more closely:** FakeMailer answers an overlapping send with the same key with Resend's transient 409 `concurrent_idempotent_requests`; FakeScheduler reads `Retry-After`/`X-RateLimit-Reset*` as seconds, an RFC 1123 date (relative to the Clock) or a duration, capped at one day (QS-RETRIES-SUCCESS); every `HubSpotClient` network method takes an optional `AbortSignal` (an aborted call is `TransientError('hubspot_timeout')`).
+- **Bundle check:** `npm run check:bundle` also scans the prerendered HTML/RSC payloads under `.next/server` and the secret values in the `.env*` files `next build` reads.
+- **Simulation:** `summary.json` names leads by stable refs (`L1`…), never by `leads.id`, and the outbox files follow, so repeated runs are identical.

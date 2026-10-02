@@ -1,0 +1,70 @@
+# Milestone gates (PLAN §15) on every push and pull request. Everything runs in fake mode on
+# fakes and PGlite: no secrets, no live services.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: typecheck · lint · test · build · bundle check · smoke · simulate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node (version from .nvmrc)
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build (fake mode)
+        run: npm run build
+        env:
+          APP_MODE: fake
+
+      - name: Client-bundle secret check
+        run: npm run check:bundle
+
+      - name: Smoke (fake mode)
+        run: npm run smoke
+        env:
+          APP_MODE: fake
+
+      - name: Simulate
+        run: npm run simulate
+        env:
+          APP_MODE: fake
+
+      - name: Upload simulation summary
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulation-summary
+          path: outbox/summary.json
+          if-no-files-found: warn
+          retention-days: 14

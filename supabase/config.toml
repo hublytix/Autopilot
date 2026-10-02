@@ -1,0 +1,17 @@
+# Supabase CLI configuration. Used during WIRE_UP for `supabase link` and `supabase db push`
+# (SB-MIGRATIONS-WORKFLOW); tests and fake mode use PGlite and never read this file.
+
+# Placeholder: `supabase link --project-ref <ref>` points the CLI at the real project.
+project_id = "hublytix-autopilot"
+
+[db]
+# Must equal the hosted project's major version: run `SHOW server_version;` there and update this
+# (PLAN §17). Migrations are written to run unchanged on 15, 17 and PGlite's 18.
+major_version = 17
+
+[auth]
+# Public sign-ups stay off (D-21): owners are created by the app (admin.createUser) at install or
+# onboarding, never by signing up. The hosted project's toggle, Authentication > "Allow new users to
+# sign up", is turned off during WIRE_UP as well, since this file does not configure the remote
+# project unless pushed.
+enable_signup = false

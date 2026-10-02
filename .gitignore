@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# env files: only the documented example is committed
+.env*
+!.env.example
+
+# other files that hold secrets in this stack: sentry-cli's auth token, the Supabase CLI's cached
+# project ref and pooler URL, private keys
+.sentryclirc
+supabase/.temp/
+supabase/.branches/
+*.pem
+*.key
+
+# local data and generated output
+.data/
+outbox/
+coverage/
+
+# misc
+.DS_Store
+*.log
+npm-debug.log*
+.vercel/
