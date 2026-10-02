@@ -24,9 +24,14 @@ function captureMessage(): CaptureMessage | undefined {
   return ns.captureMessage ?? ns.default?.captureMessage;
 }
 
-/** Raises one alert. Never throws. */
+/**
+ * Raises one alert. Never throws. `code` on the log line is always the alert code; an underlying
+ * error code goes in `errorCode` (a caller's own `code` field is kept there rather than lost).
+ */
 export function raiseAlert<C extends string>(code: LiteralCode<C>, fields: LogFields = {}): void {
-  log.error('alert raised', { ...fields, event: 'alert', code });
+  const { code: callerCode, ...rest } = fields;
+  const errorCode = rest.errorCode ?? (typeof callerCode === 'string' ? callerCode : undefined);
+  log.error('alert raised', { ...rest, errorCode, event: 'alert', code });
   try {
     captureMessage()?.(code, { level: 'error', fingerprint: ['alert', code], tags: { alert: code } });
   } catch {

@@ -263,7 +263,7 @@ async function onRefreshFailure(deps: Deps, connection: ConnectionRow, leaseId: 
         where id = $1 and status = 'active' and status_reason is distinct from $2 returning id`,
       [connection.id, OAUTH_CONFIG_REASON],
     );
-    if (firstOfEpisode !== null) raiseAlert('hubspot_oauth_config', { ...ids, code: error.code });
+    if (firstOfEpisode !== null) raiseAlert('hubspot_oauth_config', { ...ids, errorCode: error.code });
     return error;
   }
 

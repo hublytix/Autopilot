@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { CookieJar } from '@/server/adapters/fake/auth/cookies';
+import { CookieJar } from '@/server/security/cookies';
 import { createJobRegistry } from '@/server/jobs/registry';
 import { createJobTestRig, type JobTestRig } from '@/server/jobs/testing';
 import { REQUIRED_SCOPES } from '@/server/hubspot/scopes';
@@ -46,8 +46,16 @@ describe('GET /api/hubspot/install', () => {
   });
 
   it('marks the state cookie Secure when the app is served over https', async () => {
-    // A non-loopback APP_URL needs non-fake keys even in fake mode (D-29): random ones, made here.
-    const env = { APP_URL: 'https://autopilot.example.com', APP_SECRET: randomBytes(32).toString('base64'), TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('base64') };
+    // A non-loopback APP_URL needs non-fake secrets even in fake mode (D-29): random ones, made here.
+    const env = {
+      APP_URL: 'https://autopilot.example.com',
+      APP_SECRET: randomBytes(32).toString('base64'),
+      TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+      HUBSPOT_CLIENT_SECRET: randomBytes(16).toString('hex'),
+      QSTASH_CURRENT_SIGNING_KEY: `sig_${randomBytes(16).toString('hex')}`,
+      QSTASH_NEXT_SIGNING_KEY: `sig_${randomBytes(16).toString('hex')}`,
+      CRON_SECRET: randomBytes(24).toString('hex'),
+    };
     rig = createJobTestRig(getDb(), createJobRegistry(), { env });
     const res = await handleHubSpotInstall(installRequest(new CookieJar()), rig.deps);
     expect(res.headers.getSetCookie()[0]).toContain('; HttpOnly; Secure; SameSite=Lax');

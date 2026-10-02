@@ -15,6 +15,7 @@ import { onAlert, type RaisedAlert } from './alert';
 import { claimJob } from './claim';
 import { insertJob, publishJobs } from './outbox';
 import { createJobRegistry, type JobRegistry } from './registry';
+import { republishJob } from './republish';
 import { getJob } from './rows';
 import { runSweeper } from './sweeper';
 import { createJobTestRig, seedActiveAccount, seedLead, type JobTestRig } from './testing';
@@ -101,6 +102,75 @@ describe('sweeper: jobs', () => {
     await fakes.scheduler.runDue();
     expect(runs).toBe(1);
     expect(await getJob(deps.db, job.id)).toMatchObject({ status: 'done', attempts: 2 });
+  });
+
+  it('re-publishes a lost hop message for the job’s real target, never early (PLAN §8.5 hop past 7 days)', async () => {
+    const { deps, fakes, clock } = rig;
+    const runs: Date[] = [];
+    jobs.register('portal_poll', async () => {
+      runs.push(clock.now());
+      return JobOutcomes.done();
+    });
+    const start = clock.now();
+    const target = new Date(start.getTime() + 10 * 86_400_000);
+    const job = await deps.db.tx((tx) => insertJob(tx, { kind: 'portal_poll', accountId: null, dedupeKey: 'poll:sweep:far', runAt: target, now: start }));
+    await publishJobs(deps, [job]);
+    const parked = await getJob(deps.db, job?.id ?? '');
+    // Parked at the hop point (the QStash maximum delay), then its message is lost.
+    expect(parked?.runAt).toEqual(new Date(start.getTime() + deps.env.QSTASH_MAX_DELAY_SECONDS * 1000));
+    await fakes.scheduler.cancel(parked?.externalId ?? '');
+
+    clock.set(new Date((parked?.runAt.getTime() ?? 0) + 31 * 60_000));
+    expect((await sweep()).republished).toBe(1);
+    const moved = await getJob(deps.db, job?.id ?? '');
+    expect(moved).toMatchObject({ status: 'scheduled', hops: 1, runAt: target, payload: { targetAt: target.toISOString() } });
+
+    await fakes.scheduler.runDue();
+    expect(runs).toEqual([]);
+    clock.set(target);
+    await fakes.scheduler.runDue();
+    expect(runs).toEqual([target]);
+  });
+
+  it('leaves a row whose re-publish is in flight to its publisher (no false deduplicated alert)', async () => {
+    const { deps, fakes, clock } = rig;
+    jobs.register('portal_poll', async () => JobOutcomes.done());
+    const job = await insert(deps);
+    clock.advance({ minutes: 10 });
+    // The sweep lands between the re-publish compare-and-set and its publish call.
+    let swept: Awaited<ReturnType<typeof sweep>> | null = null;
+    const racing: Deps = {
+      ...deps,
+      scheduler: {
+        publish: async (request) => {
+          if (request.dedupeId.endsWith(':h1') && swept === null) swept = await sweep();
+          return deps.scheduler.publish(request);
+        },
+        cancel: (messageId) => deps.scheduler.cancel(messageId),
+      },
+    };
+    const moved = await republishJob(racing, job, new Date(clock.now().getTime() + 30 * 60_000), { type: 'hops', hops: 0 });
+    expect(swept).toMatchObject({ published: 0 });
+    expect(moved?.publish.deduplicated).toBe(false);
+    expect(alerts.filter((a) => a.code === 'job_republish_deduplicated')).toEqual([]);
+    expect(fakes.scheduler.pending().filter((m) => m.dedupeId.endsWith(':h1'))).toHaveLength(1);
+  });
+
+  it('still publishes a re-published row whose publish failed, once its run_at has passed', async () => {
+    const { deps, fakes, clock } = rig;
+    jobs.register('portal_poll', async () => JobOutcomes.done());
+    const job = await insert(deps);
+    const failing: Deps = {
+      ...deps,
+      scheduler: { publish: () => Promise.reject(new Error('qstash down')), cancel: (messageId) => deps.scheduler.cancel(messageId) },
+    };
+    await expect(republishJob(failing, job, clock.now(), { type: 'hops', hops: 0 })).rejects.toThrow();
+    expect(await getJob(deps.db, job.id)).toMatchObject({ status: 'scheduled', hops: 1, externalId: null });
+    clock.advance({ minutes: 1 });
+    expect((await sweep()).published).toBe(0);
+    clock.advance({ minutes: 2 });
+    expect((await sweep()).published).toBe(1);
+    expect(fakes.scheduler.pending().map((m) => m.dedupeId)).toContain('fake-local:poll:sweep:1:h1');
   });
 
   it('runs the failure path instead of re-publishing once attempts reach 6', async () => {

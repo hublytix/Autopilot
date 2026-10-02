@@ -81,6 +81,8 @@ Background work runs as rows in `scheduled_jobs`, delivered by QStash (live) or 
 
 Owner emails are exactly-once through `reserveAndSend` (PLAN §8.4): reserve a `notifications_sent` row under the kind's predicates, commit the action-token hashes, send with a Resend idempotency key, then commit `sent`. Periodic triggers (UTC): poll and sweeper every 5 minutes, report due-check hourly, daily maintenance at 03:17 (PLAN §8.1).
 
+**Row lock order.** A transaction that writes both an account and its connection locks `accounts` first, then `hubspot_connections`: the OAuth callback updates the account before storing the connection, and the revoke path (`services/hubspot/revoke.ts`, and M7's disconnect) takes `select … from accounts … for no key update` before its connection compare-and-set, so the two can never deadlock. `FOR NO KEY UPDATE` is what an ordinary `UPDATE` takes; it does not wait for the key-share locks that inserts with a foreign key to the account hold. A privacy deletion also locks the account row (`for no key update`) before reading the contact's leads, and the lead insert takes `for share` on it, so a lead inserted concurrently is either seen by the deletion or refused by the insert's privacy-deletion guard (PLAN §9.2, D-06).
+
 *To be completed in M8:* the job-kind table with handlers and failure paths as built, and the redelivery and crash scenarios the tests replay.
 
 ## 5. Where each concern lives

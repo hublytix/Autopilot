@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConfigError } from '@/server/domain/errors';
 import { EnvError, FAKE_ENV, parseEnv, type Env } from '@/server/env';
 import type { Db } from '@/server/db';
+import { listMigrations } from '@/server/db/migrate';
 import type { Deps } from '@/server/ports';
 import { FakeClock } from '@/server/adapters/fake/clock';
 import { CLOCK_OFFSET_KEY, DevClock } from '@/server/adapters/fake/dev-clock';
@@ -48,7 +49,9 @@ describe('container', () => {
     expect(deps.env.APP_MODE).toBe('fake');
     expect(deps.clock).toBeInstanceOf(DevClock);
     expect(container.devClock).toBe(deps.clock);
-    expect(await deps.db.query('select version from fake._migrations')).toEqual([{ version: '20261001000001' }]);
+    const versions = (await listMigrations()).map((file) => ({ version: file.version }));
+    expect(versions[0]).toEqual({ version: '20261001000001' });
+    expect(await deps.db.query('select version from fake._migrations order by version')).toEqual(versions);
     expect(deps.hubspot).toBe(container.fakes?.hubspot);
     expect(deps.mailer).toBe(container.fakes?.mailer);
   });

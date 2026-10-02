@@ -38,7 +38,7 @@ describe('signed cookies', () => {
   it('a value signed for one purpose is refused for another', () => {
     const { cookie } = issueStateCookie(env, NOW);
     expect(readPendingInstall(env, cookie.value, NOW)).toBeNull();
-    const pending = issuePendingInstallCookie(env, { accountId: ACCOUNT, installerEmail: null }, NOW);
+    const pending = issuePendingInstallCookie(env, { accountId: ACCOUNT, installerEmail: null, installedAt: NOW }, NOW);
     expect(verifyState(env, pending.value, 'anything', NOW)).toBe(false);
   });
 });
@@ -56,11 +56,20 @@ describe('the state cookie', () => {
 });
 
 describe('the pending_install cookie', () => {
-  it('carries the account and installer email for 24 hours', () => {
-    const cookie = issuePendingInstallCookie(env, { accountId: ACCOUNT, installerEmail: 'owner@example.com' }, NOW);
+  it('carries the account, installer email and install instant for 24 hours', () => {
+    const cookie = issuePendingInstallCookie(env, { accountId: ACCOUNT, installerEmail: 'owner@example.com', installedAt: NOW }, NOW);
     expect(cookie.options).toMatchObject({ httpOnly: true, sameSite: 'lax', maxAge: 86_400, path: '/' });
-    expect(readPendingInstall(env, cookie.value, new Date(NOW.getTime() + 86_400_000 - 1))).toEqual({ accountId: ACCOUNT, installerEmail: 'owner@example.com' });
+    expect(readPendingInstall(env, cookie.value, new Date(NOW.getTime() + 86_400_000 - 1))).toEqual({
+      accountId: ACCOUNT,
+      installerEmail: 'owner@example.com',
+      installedAt: NOW,
+    });
     expect(readPendingInstall(env, cookie.value, new Date(NOW.getTime() + 86_400_000))).toBeNull();
+  });
+
+  it('refuses a cookie without the install instant (one issued before installs were told apart)', () => {
+    const legacy = signCookieValue(deriveKey(env.APP_SECRET, 'pending'), { a: ACCOUNT, e: null, exp: NOW.getTime() + 60_000 });
+    expect(readPendingInstall(env, legacy, NOW)).toBeNull();
   });
 });
 

@@ -9,10 +9,11 @@ import { createJobTestRig, seedAccount, seedActiveAccount, seedConnection, seedL
 import type { Deps, Mailer } from '@/server/ports';
 import { hashActionToken, verifyActionToken, type MintedTokens } from '@/server/security/action-tokens';
 import { useTestDb as setUpTestDb } from '../../../../test/db/harness';
+import { interceptBefore } from '../../../../test/db/intercept';
 import { NotificationKeys, NotificationPredicates, type NotificationPredicate } from './predicates';
 import { createNotificationRegistry, type NotificationRegistry } from './renderers';
-import { getNotification, reserveInTx } from './reserve';
-import { reserveAndSend, sendReserved } from './send';
+import { getNotification, reserveInTx, takeOver } from './reserve';
+import { reserveAndSend, resumeReservation, sendReserved } from './send';
 import type { RenderedMail, ReserveAndSendInput } from './types';
 
 const getDb = setUpTestDb();
@@ -236,6 +237,30 @@ describe('reserveAndSend', () => {
     await expect(reserveAndSend(quota, initialSend(setup, 'new_lead'))).rejects.toMatchObject({ code: 'daily_quota_exceeded' });
     expect(alerts.map((a) => a.code)).toEqual(['resend_quota_exceeded']);
     expect((await getNotification(deps.db, setup.key))?.status).toBe('sending');
+  });
+
+  it('alerts once per quota episode, however many sends and retries hit the quota (D-36)', async () => {
+    const { deps, clock } = rig;
+    let code: 'daily_quota_exceeded' | 'monthly_quota_exceeded' = 'daily_quota_exceeded';
+    const quota: Deps = { ...deps, mailer: { send: () => Promise.reject(new TransientError(code, { httpStatus: 429 })) } };
+    const quotaAlerts = () => alerts.filter((a) => a.code === 'resend_quota_exceeded').map((a) => a.fields.errorCode);
+
+    const first = await activeLead();
+    const second = await activeLead();
+    for (const setup of [first, second, first]) {
+      await expect(reserveAndSend(quota, initialSend(setup, 'new_lead'))).rejects.toMatchObject({ code: 'daily_quota_exceeded' });
+      clock.advance({ minutes: 20 });
+    }
+    expect(quotaAlerts()).toEqual(['daily_quota_exceeded']);
+
+    // The next UTC day is a new episode; the monthly quota is its own.
+    clock.advance({ days: 1 });
+    await expect(reserveAndSend(quota, initialSend(second, 'new_lead'))).rejects.toMatchObject({ code: 'daily_quota_exceeded' });
+    code = 'monthly_quota_exceeded';
+    await expect(reserveAndSend(quota, initialSend(first, 'new_lead'))).rejects.toMatchObject({ code: 'monthly_quota_exceeded' });
+    clock.advance({ days: 2 });
+    await expect(reserveAndSend(quota, initialSend(first, 'new_lead'))).rejects.toMatchObject({ code: 'monthly_quota_exceeded' });
+    expect(quotaAlerts()).toEqual(['daily_quota_exceeded', 'daily_quota_exceeded', 'monthly_quota_exceeded']);
   });
 
   it('treats an unexpected mailer error as transient', async () => {
@@ -499,3 +524,63 @@ describe('predicates per kind', () => {
     expect(NotificationKeys.ownerAlert('A', 'settings', 'X')).toBe('alert:A:settings:X');
   });
 });
+
+// Sequential replays of two resumers of one `sending` row (a job retry or sendReserved after commit
+// racing the sweeper, PLAN §8.4 step 2, §12): only the one whose takeover matched `reserved_at`
+// mints tokens and sends.
+describe('takeover and delivery replays', () => {
+  async function sendingRow(setup: LeadSetup) {
+    const predicates = NotificationPredicates.initial({ accountId: setup.accountId, leadId: setup.leadId });
+    registry.register('new_lead', async () => ({ predicates, buttons: ['send', 'edit', 'dismiss'], render: render('New lead') }));
+    await reserveInTx(rig.deps.db, { kind: 'new_lead', dedupeKey: setup.key, accountId: setup.accountId, leadId: setup.leadId, predicates, now: rig.clock.now() });
+    const row = await getNotification(rig.deps.db, setup.key);
+    if (row === null) throw new Error('not reserved');
+    return { row, predicates };
+  }
+
+  it('two resumers holding the same stale row: the second takeover is busy, so nothing is minted or sent twice', async () => {
+    const { deps, fakes, clock } = rig;
+    const setup = await activeLead();
+    const { row: stale, predicates } = await sendingRow(setup);
+    clock.advance({ minutes: 11 });
+
+    const first = await takeOver(deps.db, stale, 'new_lead', predicates, clock.now());
+    expect(first.type).toBe('taken');
+    expect(await takeOver(deps.db, stale, 'new_lead', predicates, clock.now())).toEqual({ type: 'busy' });
+    expect(await resumeReservation(deps, stale, { bySweeper: true }, registry)).toEqual({ status: 'skipped', reason: 'busy' });
+    expect(fakes.mailer.sent).toEqual([]);
+    expect(await tokenRows(deps.db, setup.key)).toEqual([]);
+
+    // The holder's row (or the sweeper, from the current row) sends exactly once.
+    expect(await sendReserved(deps, setup.key, registry)).toMatchObject({ status: 'sent' });
+    expect(fakes.mailer.sent).toHaveLength(1);
+    expect(await tokenRows(deps.db, setup.key)).toHaveLength(3);
+  });
+
+  it('a delivery whose reservation was taken over before its attempt count commits mints nothing and sends nothing', async () => {
+    const { deps, fakes, clock } = rig;
+    const setup = await activeLead();
+    const { predicates } = await sendingRow(setup);
+    clock.advance({ minutes: 11 });
+    const current = await getNotification(deps.db, setup.key);
+    if (current === null) throw new Error('missing');
+
+    // Between A's takeover and A's step 3, the sweeper takes the row over.
+    const raced = interceptBefore(deps.db, /set send_attempts = send_attempts \+ 1/, async (handle) => {
+      const taken = await getNotification(handle, setup.key);
+      if (taken === null) throw new Error('missing');
+      expect(await takeOver(handle, taken, 'new_lead', predicates, new Date(clock.now().getTime() + 1000))).toMatchObject({ type: 'taken' });
+    });
+    const a = await resumeReservation({ ...deps, db: raced.db }, current, { bySweeper: false }, registry);
+    expect(raced.fired()).toBe(1);
+    expect(a).toEqual({ status: 'skipped', reason: 'busy' });
+    expect(fakes.mailer.sent).toEqual([]);
+    expect(await tokenRows(deps.db, setup.key)).toEqual([]);
+    expect(await getNotification(deps.db, setup.key)).toMatchObject({ status: 'sending', sendAttempts: 0 });
+
+    clock.advance({ minutes: 11 });
+    expect(await sendReserved(deps, setup.key, registry)).toMatchObject({ status: 'sent' });
+    expect(fakes.mailer.sent).toHaveLength(1);
+  });
+});
+

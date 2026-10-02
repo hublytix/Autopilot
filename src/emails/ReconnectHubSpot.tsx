@@ -7,7 +7,10 @@ import { Layout } from './Layout';
 // data is deleted on the purge date unless the owner reconnects, and reconnecting needs the right
 // HubSpot permission. Presentational only: every prop is ready-made by the caller.
 
-export const RECONNECT_HUBSPOT_SUBJECT = 'Reconnect HubSpot to keep Autopilot running';
+/** The subject, with the deployment's PRODUCT_NAME like the rest of the copy. */
+export function reconnectHubSpotSubject(productName: string): string {
+  return `Reconnect HubSpot to keep ${productName} running`;
+}
 
 export interface ReconnectHubSpotProps {
   /** PRODUCT_NAME. */

@@ -1,9 +1,8 @@
 import 'server-only';
-// The cookie helpers live with the fake AuthProvider but are written for the HTTP layer too.
-import { withSetCookies } from '@/server/adapters/fake/auth/cookies';
 import { errorCode } from '@/server/domain/errors';
 import { log } from '@/server/obs/log';
 import type { Deps } from '@/server/ports';
+import { withSetCookies } from '@/server/security/cookies';
 import { startInstall } from '@/server/services/install/start';
 
 // GET /api/hubspot/install (PLAN §7.3): rate-limited (20/min per IP), sets the signed `state` cookie
@@ -30,15 +29,18 @@ export function redirect(location: string, status: 302 | 303 = 303): Response {
   return new Response(null, { status, headers: { Location: location, ...NO_STORE } });
 }
 
+/** 429 with Retry-After for the install and callback per-IP limits. */
+export function tooManyAttempts(retryAfterSeconds: number): Response {
+  return new Response('Too many install attempts. Please try again in a minute.', {
+    status: 429,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': String(retryAfterSeconds), ...NO_STORE },
+  });
+}
+
 export async function handleHubSpotInstall(req: Request, deps: Deps): Promise<Response> {
   try {
     const result = await startInstall(deps, { ip: clientIp(req) });
-    if (result.type === 'rate_limited') {
-      return new Response('Too many install attempts. Please try again in a minute.', {
-        status: 429,
-        headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': String(result.retryAfterSeconds), ...NO_STORE },
-      });
-    }
+    if (result.type === 'rate_limited') return tooManyAttempts(result.retryAfterSeconds);
     return withSetCookies(redirect(result.location, 302), result.cookies);
   } catch (error) {
     log.error('hubspot install start failed', { event: 'hubspot.install_start_failed', code: errorCode(error) }, error);

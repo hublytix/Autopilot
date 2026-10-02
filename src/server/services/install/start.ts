@@ -1,7 +1,7 @@
 import 'server-only';
 import type { Deps, SessionCookie } from '@/server/ports';
 import { REQUIRED_SCOPES } from '@/server/hubspot/scopes';
-import { hitFixedWindow, rateLimitKeyHash } from '@/server/services/hubspot/fixed-window';
+import { hitFixedWindow, rateLimitKeyHash } from '@/server/security/rate-limit';
 import { issueStateCookie } from './cookies';
 
 // GET /api/hubspot/install (PLAN §7.3, D-36): 20 per minute per IP (Postgres fixed window, HMAC

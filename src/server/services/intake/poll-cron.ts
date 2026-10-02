@@ -5,7 +5,7 @@ import type { SweepSummary } from '@/server/jobs/sweeper';
 import { log } from '@/server/obs/log';
 import type { Deps } from '@/server/ports';
 import { applyProcessingState } from '@/server/services/accounts';
-import { ACCESS_TOKEN_SKEW_MS, refreshBackoffActive, type Sleep } from '@/server/services/hubspot';
+import { ACCESS_TOKEN_SKEW_MS, dailyLimitActive, isDailyLimit, refreshBackoffActive, type Sleep } from '@/server/services/hubspot';
 import { LeaseNames, withLease } from '@/server/services/leases';
 import { pollPortal } from './poll-portal';
 
@@ -15,7 +15,8 @@ import { pollPortal } from './poll-portal';
 //    based transitions (trial end, grace end) happen without any other trigger;
 // 2. pollPortal(…, 'cron') for each active account with an active connection, least recently polled
 //    first, within a ~240 s total budget. A portal is skipped while its token needs a refresh and
-//    `$now < next_refresh_attempt_at` (D-11's inline backoff);
+//    `$now < next_refresh_attempt_at` (D-11's inline backoff), and until its next local midnight
+//    once HubSpot answered with its daily limit (`daily_limit_until`, D-11);
 // 3. the job sweeper (PLAN §8.3 step 7);
 // 4. the retention guard (D-49).
 // The sweeper and the retention guard are passed in by the route: services never import the job
@@ -47,6 +48,8 @@ export interface PollCronSummary {
   pollBusy: number;
   pollNotActive: number;
   skippedRefreshBackoff: number;
+  /** Held until the portal's next local midnight after a daily-limit 429 (D-11). */
+  skippedDailyLimit: number;
   deferredByBudget: number;
   revoked: number;
   pollErrors: number;
@@ -68,6 +71,7 @@ function emptySummary(status: PollCronSummary['status']): PollCronSummary {
     pollBusy: 0,
     pollNotActive: 0,
     skippedRefreshBackoff: 0,
+    skippedDailyLimit: 0,
     deferredByBudget: 0,
     revoked: 0,
     pollErrors: 0,
@@ -83,6 +87,7 @@ const pollableSchema = z.object({
   id: z.string(),
   access_expires_at: z.date().nullable(),
   next_refresh_attempt_at: z.date().nullable(),
+  daily_limit_until: z.date().nullable(),
 });
 
 type Pollable = z.infer<typeof pollableSchema>;
@@ -110,7 +115,7 @@ async function applyStates(deps: Deps, summary: PollCronSummary): Promise<void> 
 /** Polls until `deadline` (the run's start + the budget). */
 async function pollAccounts(deps: Deps, options: PollCronOptions, deadline: number, summary: PollCronSummary): Promise<void> {
   const rows = await deps.db.query(
-    `select a.id, c.access_expires_at, c.next_refresh_attempt_at
+    `select a.id, c.access_expires_at, c.next_refresh_attempt_at, c.daily_limit_until
        from accounts a join hubspot_connections c on c.account_id = a.id
       where a.processing_state = 'active' and c.status = 'active'
       order by c.last_polled_at nulls first, a.id`,
@@ -127,6 +132,10 @@ async function pollAccounts(deps: Deps, options: PollCronOptions, deadline: numb
       summary.deferredByBudget = pollable.length - index;
       log.warn('poll budget spent', { event: 'cron.poll.budget', remaining: summary.deferredByBudget });
       return;
+    }
+    if (dailyLimitActive(row, now)) {
+      summary.skippedDailyLimit += 1;
+      continue;
     }
     if (inRefreshBackoff(row, now)) {
       summary.skippedRefreshBackoff += 1;
@@ -147,6 +156,9 @@ async function pollAccounts(deps: Deps, options: PollCronOptions, deadline: numb
         summary.revoked += 1;
       } else if (isAppError(error) && error.code === 'hubspot_refresh_backoff') {
         summary.skippedRefreshBackoff += 1;
+      } else if (isDailyLimit(error)) {
+        // The portal client recorded the hold: later runs skip the portal until its local midnight.
+        summary.skippedDailyLimit += 1;
       } else {
         summary.pollErrors += 1;
         log.warn('portal poll failed', { event: 'cron.poll.error', accountId: row.id, code: errorCode(error) }, error);
@@ -186,7 +198,7 @@ export async function runPollCron(deps: Deps, options: PollCronOptions): Promise
     event: 'cron.poll',
     total: summary.accounts,
     count: summary.polled,
-    skipped: summary.skippedRefreshBackoff + summary.deferredByBudget + summary.pollBusy,
+    skipped: summary.skippedRefreshBackoff + summary.skippedDailyLimit + summary.deferredByBudget + summary.pollBusy,
   });
   return summary;
 }

@@ -16,14 +16,20 @@ import { ensureJobHandlersRegistered } from './handlers';
 import { publishJob } from './outbox';
 import type { JobRegistry } from './registry';
 import { republishJob } from './republish';
-import { JOB_COLUMNS, toJobRow } from './rows';
+import { JOB_COLUMNS, targetAtOf, toJobRow } from './rows';
 import { JOB_MAX_ATTEMPTS, type JobRow } from './types';
 
 // The sweeper (PLAN §8.3 step 7, D-15, D-45), run by the poll cron. Every action is a
 // compare-and-set, so overlapping sweeps (or a delivery racing one) do each thing once:
-// - a `scheduled` row never published (external_id null) for 2 min → publish;
+// - a `scheduled` row never published (external_id null) for 2 min → publish. A re-published row
+//   (hops > 0) counts from its run_at, not its created_at: right after a hop, re-target or
+//   re-publish compare-and-set its publish is in flight, and publishing the same `:h{hops}` id
+//   first would make that publish come back deduplicated (a false `job_republish_deduplicated`);
 // - a `scheduled` row whose run_at is over 30 min past → re-publish (the message was lost);
 // - a `running` row whose lease expired → re-publish (the attempt died);
+//   both re-publish for the job's real target (`payload.targetAt`) when it is still ahead, so a
+//   lost hop message never makes the job run early (publishJob clamps to the QStash maximum delay
+//   and the next delivery hops again), else for now;
 // - any of those with attempts ≥ 6 → the failure path instead;
 // - a failed `weekly_report` job while weekly_reports.attempts < 3 and before local Tuesday 00:00
 //   → back to scheduled (claim count reset) and re-published;
@@ -72,7 +78,7 @@ export async function runSweeper(deps: Deps, options: SweepOptions = {}): Promis
 
   const unpublished = await selectJobs(
     deps,
-    `status = 'scheduled' and external_id is null and created_at < $1 order by created_at`,
+    `status = 'scheduled' and external_id is null and created_at < $1 and (hops = 0 or run_at < $1) order by created_at`,
     [new Date(now.getTime() - UNPUBLISHED_GRACE_MS)],
     limit,
   );
@@ -92,7 +98,10 @@ export async function runSweeper(deps: Deps, options: SweepOptions = {}): Promis
   const expired = await selectJobs(deps, `status = 'running' and lease_until < $1 order by lease_until`, [now], limit);
   for (const job of [...missed, ...expired]) {
     await sweepJob(deps, job, jobRegistry, summary, async () => {
-      const moved = await republishJob(deps, job, deps.clock.now(), { type: 'hops', hops: job.hops });
+      const at = deps.clock.now();
+      const target = targetAtOf(job);
+      const runAt = target !== null && target.getTime() > at.getTime() ? target : at;
+      const moved = await republishJob(deps, job, runAt, { type: 'hops', hops: job.hops });
       if (moved !== null) summary.republished += 1;
     });
   }

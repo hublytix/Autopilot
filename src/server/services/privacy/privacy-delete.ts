@@ -18,6 +18,9 @@ import { revokeTokens } from '@/server/security/action-tokens';
 // - set `stop_reason = 'privacy_deletion'`.
 // It runs for every known portal whatever its state, and is idempotent: a replay finds nothing left
 // to remove. Ids, timestamps and statuses stay (law 4 allows them).
+// The account row is locked first (`FOR NO KEY UPDATE`): a lead insert for this contact that is
+// still in flight (it holds `FOR SHARE`) commits before the leads are read, and any later insert
+// is refused by intake's privacy-deletion guard (insert-lead.ts).
 
 export interface PrivacyDeleteInput {
   accountId: string;
@@ -41,6 +44,7 @@ export interface PrivacyDeleteOutcome {
 
 /** Inside the caller's transaction (no network I/O); cancel `cancelled` after commit. */
 export async function privacyDeleteInTx(tx: Db, input: PrivacyDeleteInput, now: Date): Promise<PrivacyDeleteOutcome> {
+  await tx.query(`select id from accounts where id = $1 for no key update`, [input.accountId]);
   const leads = await tx.query<{ id: string }>(
     `select id from leads where account_id = $1 and hubspot_contact_id = $2 order by id for update`,
     [input.accountId, input.contactId],

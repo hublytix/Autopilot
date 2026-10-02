@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermanentError } from '@/server/domain/errors';
 import type { AuthOtpType } from '@/server/domain/types';
 import { FakeClock } from '../clock';
-import { CookieJar, parseCookieHeader, serializeSetCookie, toCookieHeader, withSetCookies } from './cookies';
+import { CookieJar, parseCookieHeader, serializeSetCookie, toCookieHeader, withSetCookies } from '@/server/security/cookies';
 import { FakeAuthProvider, SESSION_COOKIE_NAME } from './fake-auth';
 
 const START = new Date('2026-10-06T13:00:00.000Z');

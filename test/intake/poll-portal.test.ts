@@ -3,6 +3,7 @@ import { onAlert } from '@/server/jobs';
 import { emailHmac, pollPortal, POLL_OVERLAP_MS } from '@/server/services/intake';
 import { acquireLease, LeaseNames } from '@/server/services/leases';
 import { useTestDb as setUpTestDb } from '../db/harness';
+import { interceptBefore } from '../db/intercept';
 import { createIntakeRig, cursorOf, HOUR, jobsOf, leadsOf, MINUTE, runCron, type IntakeRig } from './support';
 
 // pollPortal (PLAN §9.2, D-07, D-14, D-16, D-31) and the PLAN §12 intake cases, on the fake portal.
@@ -202,12 +203,39 @@ describe('pollPortal', () => {
         [rig.accountId],
       );
       expect(audit).toHaveLength(1);
-      expect(audit[0]).toMatchObject({ action: 'intake.contact_not_found', level: 'warn', meta: { formId: rig.contactUs } });
+      expect(audit[0]).toMatchObject({ action: 'intake.contact_not_found', level: 'warn' });
+      // Only the form and the instant: no submission key (an HMAC of the email without a conversion id, D-31).
+      expect(audit[0]?.meta).toEqual({ formId: rig.contactUs, submittedAt: at.toISOString() });
       const serialized = JSON.stringify(audit);
       for (const content of ['ghost@example.com', 'Casper', 'Secret message']) expect(serialized).not.toContain(content);
       expect(alerts.filter((code) => code === 'intake_contact_not_found')).toHaveLength(1);
       expect(await cursorOf(getDb(), rig.accountId, rig.contactUs)).toEqual(at);
       expect(await leadsOf(getDb(), rig.accountId)).toHaveLength(0);
+    } finally {
+      stop();
+    }
+  });
+
+  it('keeps the cursor under an hour past a submission still waiting for its contact, so its give-up is still recorded', async () => {
+    const alerts: string[] = [];
+    const stop = onAlert((alert) => alerts.push(alert.code));
+    try {
+      const at = rig.clock.now();
+      rig.hubspot.submitForm({ formId: rig.contactUs, email: 'ghost@example.com', message: 'Hello?', at, newContact: true, visibilityDelayMs: 10 * 24 * HOUR });
+      // A newer submission exactly an hour later is processed in the same poll that still waits for the first.
+      const later = new Date(at.getTime() + POLL_OVERLAP_MS);
+      rig.clock.set(later);
+      rig.hubspot.submitForm({ formId: rig.contactUs, email: 'fast.contact@example.com', message: 'Blocked drain.', at: later, newContact: true });
+      expect(await poll()).toMatchObject({ counts: { leadsCreated: 1, contactPending: 1 } });
+      expect(await cursorOf(getDb(), rig.accountId, rig.contactUs)).toEqual(new Date(later.getTime() - 1));
+
+      // The next poll still sees the first submission, now past its hour: audited and alerted once.
+      rig.clock.advance(5 * MINUTE);
+      expect(await poll()).toMatchObject({ counts: { contactMissing: 1, alreadyKnown: 1 } });
+      const audit = await getDb().query<{ meta: Record<string, unknown> }>(`select meta from audit_log where account_id = $1`, [rig.accountId]);
+      expect(audit.map((row) => row.meta)).toEqual([{ formId: rig.contactUs, submittedAt: at.toISOString() }]);
+      expect(alerts.filter((code) => code === 'intake_contact_not_found')).toHaveLength(1);
+      expect(await cursorOf(getDb(), rig.accountId, rig.contactUs)).toEqual(later);
     } finally {
       stop();
     }
@@ -237,5 +265,29 @@ describe('pollPortal', () => {
     const [lead] = await leadsOf(getDb(), rig.accountId);
     expect(lead?.conversion_id).toBeNull();
     expect(lead?.submission_key).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('a submission seen again under another submission key is recognised by contact and instant (both unique keys)', async () => {
+    rig.hubspot.submitForm({ formId: rig.contactUs, email: 'tom.reyes@example.org', message: 'Once.', at: rig.clock.now() });
+    expect(await poll()).toMatchObject({ counts: { leadsCreated: 1 } });
+    // The stored key differs from the listing's (e.g. no conversion id in an earlier listing).
+    await getDb().query(`update leads set submission_key = $2 where account_id = $1`, [rig.accountId, 'f'.repeat(64)]);
+    rig.clock.advance(5 * MINUTE);
+    expect(await poll()).toMatchObject({ status: 'polled', counts: { leadsCreated: 0, alreadyKnown: 1 } });
+    expect(await leadsOf(getDb(), rig.accountId)).toHaveLength(1);
+    expect(await jobsOf(getDb(), 'lead_process')).toHaveLength(1);
+  });
+
+  it('an account paused between the poll’s check and the insert gets no lead and no lead_process job', async () => {
+    rig.hubspot.submitForm({ formId: rig.contactUs, email: 'tom.reyes@example.org', message: 'While pausing.', at: rig.clock.now() });
+    const raced = interceptBefore(getDb(), /insert into leads/, async (handle) => {
+      await handle.query(`update accounts set paused_at = $2, processing_state = 'paused' where id = $1`, [rig.accountId, rig.clock.now()]);
+    });
+    const result = await pollPortal({ ...rig.deps, db: raced.db }, rig.accountId, 'cron', { sleep: rig.sleep });
+    expect(raced.fired()).toBe(1);
+    expect(result).toMatchObject({ status: 'polled', counts: { leadsCreated: 0 } });
+    expect(await leadsOf(getDb(), rig.accountId)).toEqual([]);
+    expect(await getDb().query(`select lead_id from lead_messages`)).toEqual([]);
+    expect(await jobsOf(getDb(), 'lead_process')).toEqual([]);
   });
 });

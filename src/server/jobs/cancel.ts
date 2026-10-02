@@ -10,6 +10,10 @@ import type { Deps } from '@/server/ports';
 // QStash message is cancelled by its id. A 404 counts as success (the Scheduler port maps it), and
 // there is never a bulk or filter cancel: a message that still arrives finds the row cancelled and
 // answers 200. A running job is cancelled too, so its attempt's guarded writes change nothing.
+//
+// An account-wide cancel (revoke, disconnect, purge) never cancels a `privacy_delete` job: D-06 and
+// PLAN §7.3 process a privacy deletion for every known portal whatever its state, and HubSpot's
+// retry of the event is dropped as a duplicate, so a cancelled deletion would never run (law 4).
 
 /** Why jobs were cancelled; stored in `cancel_reason`. */
 export type JobCancelReason =
@@ -29,12 +33,20 @@ export interface CancelJobsFilter {
   accountId?: string | undefined;
   /** Limit to these kinds (e.g. only `followup`). */
   kinds?: readonly JobKind[] | undefined;
+  /**
+   * Leave jobs of these kinds alone. Default: none, except for an account-wide cancel (accountId
+   * without leadId or kinds), which defaults to ACCOUNT_CANCEL_EXCEPT_KINDS.
+   */
+  exceptKinds?: readonly JobKind[] | undefined;
   /** Leave this job alone (a follow-up job cancelling the remaining ones). */
   exceptJobId?: string | undefined;
   reason: JobCancelReason;
   /** `$now`. */
   now: Date;
 }
+
+/** Kinds an account-wide cancel leaves running: a privacy deletion must still happen (D-06). */
+export const ACCOUNT_CANCEL_EXCEPT_KINDS = ['privacy_delete'] as const satisfies readonly JobKind[];
 
 /** The QStash messages to cancel after commit. */
 export interface CancelledJobs {
@@ -62,6 +74,9 @@ export async function cancelJobsInTx(tx: Db, filter: CancelJobsFilter): Promise<
   if (filter.leadId !== undefined) where.push(`lead_id = ${bind(filter.leadId)}`);
   if (filter.accountId !== undefined) where.push(`account_id = ${bind(filter.accountId)}`);
   if (filter.kinds !== undefined) where.push(`kind = any(${bind([...filter.kinds])}::text[])`);
+  const accountWide = filter.leadId === undefined && filter.kinds === undefined;
+  const exceptKinds = filter.exceptKinds ?? (accountWide ? ACCOUNT_CANCEL_EXCEPT_KINDS : []);
+  if (exceptKinds.length > 0) where.push(`kind <> all(${bind([...exceptKinds])}::text[])`);
   if (filter.exceptJobId !== undefined) where.push(`id <> ${bind(filter.exceptJobId)}`);
   const rows = await tx.query<{ id: string; external_id: string | null }>(
     `update scheduled_jobs

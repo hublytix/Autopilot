@@ -2,10 +2,23 @@ import { QSTASH_PUBLIC_DEV_TOKEN } from '../../test/support/fake-secrets';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ENV_DEFAULTS, ENV_NAMES, EnvError, FAKE_ENV, getEnv, parseEnv, type EnvSource } from './env';
+import { ENV_DEFAULTS, ENV_NAMES, EnvError, FAKE_ENV, getEnv, parseEnv, REACHABLE_FAKE_SECRETS, type EnvSource } from './env';
 
 // Plausible, clearly non-real live values (no real secrets anywhere in the repo).
 const key = (fill: number): string => Buffer.alloc(32, fill).toString('base64');
+
+/** Real-looking values for every secret fake mode needs when others can reach it. */
+function realReachableSecrets(): Record<(typeof REACHABLE_FAKE_SECRETS)[number], string> {
+  const live = liveSource();
+  return {
+    APP_SECRET: key(7),
+    TOKEN_ENCRYPTION_KEY: key(8),
+    HUBSPOT_CLIENT_SECRET: live.HUBSPOT_CLIENT_SECRET ?? '',
+    QSTASH_CURRENT_SIGNING_KEY: live.QSTASH_CURRENT_SIGNING_KEY ?? '',
+    QSTASH_NEXT_SIGNING_KEY: live.QSTASH_NEXT_SIGNING_KEY ?? '',
+    CRON_SECRET: live.CRON_SECRET ?? '',
+  };
+}
 
 function liveSource(overrides: Record<string, string | undefined> = {}): EnvSource {
   return {
@@ -210,7 +223,7 @@ describe('env.ts (PLAN §14, D-29, D-51)', () => {
     });
 
     it.each(['production', 'preview'])('is refused on Vercel %s', (vercelEnv) => {
-      const realKeys = { APP_SECRET: key(7), TOKEN_ENCRYPTION_KEY: key(8) };
+      const realKeys = realReachableSecrets();
       expect(issuesOf({ APP_MODE: 'fake', VERCEL_ENV: vercelEnv, ...realKeys })).toEqual([
         `APP_MODE: fake mode is refused on Vercel ${vercelEnv} unless ALLOW_FAKE_ON_VERCEL=1`,
       ]);
@@ -221,25 +234,34 @@ describe('env.ts (PLAN §14, D-29, D-51)', () => {
     });
 
     it('is allowed on Vercel with ALLOW_FAKE_ON_VERCEL=1 and real keys, and on Vercel development', () => {
-      const realKeys = { APP_SECRET: key(7), TOKEN_ENCRYPTION_KEY: key(8) };
+      const realKeys = realReachableSecrets();
       expect(parseEnv({ APP_MODE: 'fake', VERCEL_ENV: 'preview', ALLOW_FAKE_ON_VERCEL: '1', ...realKeys }).ALLOW_FAKE_ON_VERCEL).toBe(true);
       expect(parseEnv({ APP_MODE: 'fake', VERCEL_ENV: 'development' }).APP_MODE).toBe('fake');
     });
 
     // The fake keys are public: on a reachable deployment they would let anyone forge an ap_session
-    // cookie (its key is derived from APP_SECRET) for any user, admins included.
+    // cookie (its key is derived from APP_SECRET) for any user, admins included, sign a HubSpot
+    // webhook (a forged contact.privacyDeletion wipes a lead's content), mint a QStash JWT for
+    // /api/jobs/* or call /api/cron/* with the fake Bearer secret.
     it.each([
       ['Vercel preview', { VERCEL_ENV: 'preview', ALLOW_FAKE_ON_VERCEL: '1' }],
       ['Vercel production', { VERCEL_ENV: 'production', ALLOW_FAKE_ON_VERCEL: '1' }],
       ['a public APP_URL', { APP_URL: 'https://demo.autopilot.example.com' }],
       ['a LAN APP_URL', { APP_URL: 'http://192.168.1.20:3000' }],
-    ])('on %s, refuses the documented fake APP_SECRET and TOKEN_ENCRYPTION_KEY', (_where, overrides) => {
+    ])('on %s, refuses every documented fake secret that authenticates a request', (_where, overrides) => {
       const problem = 'fake mode on a Vercel deployment or a non-loopback APP_URL needs a real, non-fake value';
-      expect(issuesOf({ APP_MODE: 'fake', ...overrides })).toEqual([`APP_SECRET: ${problem}`, `TOKEN_ENCRYPTION_KEY: ${problem}`]);
-      expect(issuesOf({ APP_MODE: 'fake', ...overrides, APP_SECRET: FAKE_ENV.APP_SECRET, TOKEN_ENCRYPTION_KEY: key(8) })).toEqual([
-        `APP_SECRET: ${problem}`,
+      expect(issuesOf({ APP_MODE: 'fake', ...overrides })).toEqual(REACHABLE_FAKE_SECRETS.map((name) => `${name}: ${problem}`));
+      expect(issuesOf({ APP_MODE: 'fake', ...overrides, ...realReachableSecrets(), APP_SECRET: FAKE_ENV.APP_SECRET })).toEqual([`APP_SECRET: ${problem}`]);
+      for (const name of ['HUBSPOT_CLIENT_SECRET', 'QSTASH_CURRENT_SIGNING_KEY', 'QSTASH_NEXT_SIGNING_KEY', 'CRON_SECRET'] as const) {
+        expect(issuesOf({ APP_MODE: 'fake', ...overrides, ...realReachableSecrets(), [name]: FAKE_ENV[name] })).toEqual([`${name}: ${problem}`]);
+      }
+      // QStash's public dev-server keys are as public as the fake ones.
+      expect(issuesOf({ APP_MODE: 'fake', ...overrides, ...realReachableSecrets(), QSTASH_NEXT_SIGNING_KEY: 'sig_5ZB6DVzB1wjE8S6rZ7eenA8Pdnhs' })).toEqual([
+        `QSTASH_NEXT_SIGNING_KEY: ${problem}`,
       ]);
-      expect(issuesOf({ APP_MODE: 'fake', ...overrides, APP_SECRET: key(7), TOKEN_ENCRYPTION_KEY: key(8) })).toEqual([]);
+      expect(issuesOf({ APP_MODE: 'fake', ...overrides, ...realReachableSecrets() })).toEqual([]);
+      // The fakes sign with the env values, so the real ones are what fake mode then uses.
+      expect(parseEnv({ APP_MODE: 'fake', ...overrides, ...realReachableSecrets() }).CRON_SECRET).toBe(realReachableSecrets().CRON_SECRET);
     });
 
     it.each(['http://localhost:3000', 'http://127.0.0.1:4100', 'http://[::1]:3000', 'http://autopilot.localhost:3000'])(
@@ -399,6 +421,25 @@ describe('env.ts (PLAN §14, D-29, D-51)', () => {
         issuesOf(liveSource({ DATABASE_URL: 'postgresql://postgres.ref:pw-test-123@aws-0-eu-central-1.pooler.supabase.com:5432/postgres' })),
       ).toContainEqual('DATABASE_URL: must be the Supabase transaction pooler (port 6543, D-28)');
       expect(issuesOf(liveSource({ HUBSPOT_CLIENT_ID: 'my-client' }))).toContainEqual('HUBSPOT_CLIENT_ID: must be the app client id (a UUID)');
+    });
+
+    // The state cookie is scoped to the callback path, and webhooks are signed for the exact target URL.
+    it.each([
+      'https://autopilot.example.com/api/hubspot/callback',
+      'https://autopilot.example.com/api/hubspot/oauth/callback/',
+      'https://autopilot.example.com/api/hubspot/oauth/callback?x=1',
+    ])('refuses a redirect URI other than APP_URL + the callback path: %s', (uri) => {
+      expect(issuesOf(liveSource({ HUBSPOT_REDIRECT_URI: uri }))).toEqual([
+        'HUBSPOT_REDIRECT_URI: must be APP_URL + /api/hubspot/oauth/callback, without a query or fragment',
+      ]);
+    });
+
+    it.each([
+      'https://autopilot.example.com/api/hubspot/webhook',
+      'https://elsewhere.example.com/api/hubspot/webhooks',
+      'https://autopilot.example.com/api/hubspot/webhooks?x=1',
+    ])('refuses a webhook target other than APP_URL + the webhook path: %s', (uri) => {
+      expect(issuesOf(liveSource({ HUBSPOT_WEBHOOK_TARGET_URL: uri }))).toEqual(['HUBSPOT_WEBHOOK_TARGET_URL: must be APP_URL + /api/hubspot/webhooks']);
     });
 
     it('accepts optional Sentry values when well-formed', () => {

@@ -51,6 +51,8 @@ describe('ESLint guards', () => {
   it.each([
     ['src/server/services/x.ts', "import { FakeClock } from '@/server/adapters/fake/clock';\nexport const c = FakeClock;\n"],
     ['src/server/adapters/fake/x.ts', "import { run } from '@/server/services/run';\nexport const r = run;\n"],
+    // Live HTTP handlers never depend on a (fake) adapter module; Deps carries the adapters.
+    ['src/server/http/x.ts', "import { withSetCookies } from '@/server/adapters/fake/auth/cookies';\nexport const w = withSetCookies;\n"],
     ['src/server/domain/x.ts', "import { getEnv } from '@/server/env';\nexport const e = getEnv;\n"],
     ['src/server/domain/y.ts', "import { readFile } from 'node:fs/promises';\nexport const r = readFile;\n"],
     ['src/server/ports/x.ts', "import { getEnv } from '@/server/env';\nexport const e = getEnv;\n"],
@@ -100,6 +102,7 @@ describe('ESLint guards', () => {
     ['src/server/services/x.test.ts', "import { FakeClock } from '@/server/adapters/fake/clock';\nexport const c = FakeClock;\n"],
     ['src/server/services/x.ts', "import type { FakeAdapters } from '@/server/adapters/fake';\nimport { type FakeClock } from '@/server/adapters/fake/clock';\nexport type { FakeHubSpot } from '@/server/adapters/fake/hubspot';\nexport type X = [FakeAdapters, FakeClock];\n"],
     ['src/server/container.ts', "export const a = await import('@/server/adapters/fake');\n"],
+    ['src/server/http/x.ts', "import type { FakeAdapters } from '@/server/adapters/fake';\nimport { withSetCookies } from '@/server/security/cookies';\nexport const a: [FakeAdapters | null, unknown] = [null, withSetCookies];\n"],
     ['src/proxy.ts', "import { NextResponse } from 'next/server';\nimport { buildCsp } from '@/server/security/csp';\nimport { FakeAuthProvider } from '@/server/adapters/fake/auth';\nimport { redact } from '@/shared/observability/redact';\nimport type { Deps } from '@/server/ports';\nexport const p: [unknown, unknown, unknown, unknown, Deps | null] = [NextResponse, buildCsp, FakeAuthProvider, redact, null];\n"],
   ])('allows the permitted imports in %s', async (file, code) => {
     expect((await rulesFiredAt(file, code)).filter(isBoundary)).toEqual([]);

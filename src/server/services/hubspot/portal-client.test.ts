@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeHubSpot } from '@/server/adapters/fake/hubspot';
 import { RevokedError, TransientError } from '@/server/domain/errors';
-import { createJobRegistry } from '@/server/jobs/registry';
+import { onAlert, type RaisedAlert } from '@/server/jobs/alert';
+import { insertJob, publishJobs } from '@/server/jobs/outbox';
+import { createJobRegistry, type JobRegistry } from '@/server/jobs/registry';
+import { getJob } from '@/server/jobs/rows';
+import { JobOutcomes } from '@/server/jobs/types';
 import { createJobTestRig, seedAccount, seedSettings, type JobTestRig } from '@/server/jobs/testing';
 import { classifyRefreshFailure } from '@/server/hubspot/refresh-classifier';
 import type { Deps } from '@/server/ports';
@@ -14,6 +18,7 @@ import { getAccessToken, type Sleep } from './token-manager';
 const getDb = setUpTestDb();
 
 let rig: JobTestRig;
+let registry: JobRegistry;
 let hubspot: FakeHubSpot;
 let deps: Deps;
 let accountId: string;
@@ -26,7 +31,8 @@ const sleep: Sleep = async (ms) => {
 };
 
 beforeEach(async () => {
-  rig = createJobTestRig(getDb(), createJobRegistry());
+  registry = createJobRegistry();
+  rig = createJobTestRig(getDb(), registry);
   hubspot = new FakeHubSpot({ clock: rig.clock, appUrl: rig.deps.env.APP_URL, classifyRefreshFailure });
   deps = { ...rig.deps, hubspot };
   sleeps = [];
@@ -146,14 +152,29 @@ describe('the per-portal limiter (D-36)', () => {
     expect(rig.clock.now()).toEqual(new Date('2026-10-06T14:00:11.000Z'));
   });
 
-  it('allows 4 search requests per second, counted apart from general requests', async () => {
+  it('allows 2 search requests per one-second window, counted apart from general requests', async () => {
     const client = forAccount(deps, accountId, { sleep });
     rig.clock.set(new Date('2026-10-06T14:00:20.250Z'));
-    for (let i = 0; i < 4; i += 1) await client.searchEmailsCount({ direction: 'outbound', since: new Date('2026-09-01T00:00:00.000Z') });
+    for (let i = 0; i < PORTAL_RATE_LIMITS.search; i += 1) await client.searchEmailsCount({ direction: 'outbound', since: new Date('2026-09-01T00:00:00.000Z') });
     await client.accountDetails();
     expect(sleeps).toEqual([]);
     await client.searchEmailsCount({ direction: 'inbound', since: new Date('2026-09-01T00:00:00.000Z') });
     expect(sleeps).toEqual([750]);
+  });
+
+  it('never lets more than 4 search calls through in any rolling second, across window boundaries (HubSpot allows 5)', async () => {
+    const at: number[] = [];
+    const search = vi.spyOn(hubspot, 'searchEmailsCount').mockImplementation(async () => {
+      at.push(rig.clock.now().getTime());
+      return 0;
+    });
+    const client = forAccount(deps, accountId, { sleep });
+    // Start just before a window ends, the worst case for aligned windows.
+    rig.clock.set(new Date('2026-10-06T14:00:20.900Z'));
+    for (let i = 0; i < 20; i += 1) await client.searchEmailsCount({ direction: 'outbound', since: new Date('2026-09-01T00:00:00.000Z') });
+    expect(search).toHaveBeenCalledTimes(20);
+    const busiest = Math.max(...at.map((start) => at.filter((t) => t >= start && t < start + 1000).length));
+    expect(busiest).toBeLessThanOrEqual(4);
   });
 
   it('keys the counters by an HMAC of portal and bucket, never the portal id itself', async () => {
@@ -171,5 +192,70 @@ describe('the per-portal limiter (D-36)', () => {
     expect(batchRead.mock.calls.map((call) => call[1].length)).toEqual([100, 100, 50]);
     const rows = await getDb().query<{ count: number }>(`select count from rate_limits`);
     expect(rows.reduce((sum, row) => sum + row.count, 0)).toBe(3);
+  });
+});
+
+describe('HubSpot daily limit (D-11)', () => {
+  // The account is in America/New_York; the clock starts on 2026-10-06 at 10:00 local time.
+  const HOLD_END = new Date('2026-10-07T04:10:00.000Z');
+
+  async function storedHold(): Promise<Date | null> {
+    return (await getDb().one<{ daily_limit_until: Date | null }>(`select daily_limit_until from hubspot_connections where id = $1`, [connectionId]))
+      .daily_limit_until;
+  }
+
+  it('holds the portal until just after its next local midnight and refuses calls meanwhile without calling HubSpot', async () => {
+    hubspot.injectFailure('accountDetails', { kind: 'daily_limit' });
+    const error: unknown = await forAccount(deps, accountId, { sleep })
+      .accountDetails()
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TransientError);
+    expect(error).toMatchObject({ code: 'hubspot_daily_limit', retryAfterMs: HOLD_END.getTime() - rig.clock.now().getTime() });
+    expect(await storedHold()).toEqual(HOLD_END);
+
+    const details = vi.spyOn(hubspot, 'accountDetails');
+    const forms = vi.spyOn(hubspot, 'listForms');
+    rig.clock.set(new Date('2026-10-07T04:00:00.000Z'));
+    await expect(forAccount(deps, accountId, { sleep }).accountDetails()).rejects.toMatchObject({ code: 'hubspot_daily_limit', retryAfterMs: 10 * 60_000 });
+    await expect(forAccount(deps, accountId, { sleep }).listForms()).rejects.toMatchObject({ code: 'hubspot_daily_limit' });
+    expect(details).not.toHaveBeenCalled();
+    expect(forms).not.toHaveBeenCalled();
+
+    rig.clock.set(HOLD_END);
+    expect(await forAccount(deps, accountId, { sleep }).accountDetails()).toMatchObject({ portalId: '1234567' });
+  });
+
+  it('a job that hits it is re-targeted to the hold’s end instead of spending its retries, and runs then', async () => {
+    const alerts: RaisedAlert[] = [];
+    const stop = onAlert((alert) => alerts.push(alert));
+    try {
+      let runs = 0;
+      registry.register('baseline', async () => {
+        runs += 1;
+        await forAccount(deps, accountId, { sleep }).accountDetails();
+        return JobOutcomes.done();
+      });
+      hubspot.injectFailure('accountDetails', { kind: 'daily_limit' });
+      const now = rig.clock.now();
+      const job = await getDb().tx((tx) => insertJob(tx, { kind: 'baseline', accountId, dedupeKey: `baseline:${accountId}:2026-10-06`, runAt: now, now }));
+      await publishJobs(rig.deps, [job]);
+      await rig.fakes.scheduler.runDue();
+      expect(runs).toBe(1);
+      const deferred = await getJob(getDb(), job?.id ?? '');
+      expect(deferred).toMatchObject({ status: 'scheduled', hops: 1, runAt: HOLD_END, payload: { targetAt: HOLD_END.toISOString() } });
+
+      // Nothing runs before the hold ends.
+      rig.clock.set(new Date(HOLD_END.getTime() - 60_000));
+      await rig.fakes.scheduler.runDue();
+      expect(runs).toBe(1);
+
+      rig.clock.set(HOLD_END);
+      await rig.fakes.scheduler.runDue();
+      expect(runs).toBe(2);
+      expect(await getJob(getDb(), job?.id ?? '')).toMatchObject({ status: 'done' });
+      expect(alerts.filter((alert) => alert.code === 'job_failed')).toEqual([]);
+    } finally {
+      stop();
+    }
   });
 });

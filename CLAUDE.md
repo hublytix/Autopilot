@@ -5,7 +5,7 @@ Autopilot drafts replies and follow-ups for new HubSpot form leads; the owner se
 ## Where things are written down
 - `docs/BUILD_BRIEF.md`: the original spec. The product laws below always apply.
 - `docs/PLAN.md`: the approved plan (schema §5, routes §7, jobs §8, flows §9, security §10, tests §12, simulation §13, env §14, milestones §15). Build exactly what it says. If PLAN and DECISIONS disagree, PLAN wins; record the discrepancy.
-- `docs/DECISIONS.md`: D-01…D-54, the detailed rules behind the plan (D-53 records the M1 review fixes, D-54 the M2 build choices).
+- `docs/DECISIONS.md`: D-01…D-55, the detailed rules behind the plan (D-53 records the M1 review fixes, D-54 the M2 build choices, D-55 the M2 review fixes).
 - `docs/RESEARCH.md` + `docs/research/*.md`: verified vendor facts and test vectors. Finding IDs in [brackets] point here.
 - `docs/ARCHITECTURE.md`: layers, data flow, where each concern lives.
 - `docs/WIRE_UP.md` (M8): connecting the real services.

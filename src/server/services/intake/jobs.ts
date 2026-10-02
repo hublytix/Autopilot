@@ -1,14 +1,16 @@
 import 'server-only';
 import { isRevoked } from '@/server/domain/errors';
 import { JobOutcomes, type JobHandler } from '@/server/jobs';
-import type { Sleep } from '@/server/services/hubspot';
+import { isDailyLimit, type Sleep } from '@/server/services/hubspot';
 import { pollPortal } from './poll-portal';
 
 // The `portal_poll` job (PLAN §8.2): inserted by the webhook route (debounced, now and +90 s) and
 // delivered by QStash. It polls the account as `webhook`, so the leads it finds record that trigger.
 // A busy lease (another poll is running) or an account that is no longer active ends the job
 // `skipped`: the running poll, or the next cron poll, covers the same submissions. A revoked
-// connection is skipped too (the revoke path already ran); other errors retry through QStash.
+// connection is skipped too (the revoke path already ran), and so is a portal held by HubSpot's
+// daily limit (the cron poll resumes after its local midnight; re-targeting every webhook's poll
+// to midnight would only queue a burst of redundant polls); other errors retry through QStash.
 
 export interface PortalPollJobOptions {
   /** For the portal limiter; default real timers (tests advance their FakeClock). */
@@ -22,7 +24,7 @@ export function createPortalPollJobHandler(options: PortalPollJobOptions = {}): 
       const result = await pollPortal(deps, job.accountId, 'webhook', { sleep: options.sleep });
       return result.status === 'polled' ? JobOutcomes.done() : JobOutcomes.skipped();
     } catch (error) {
-      if (isRevoked(error)) return JobOutcomes.skipped();
+      if (isRevoked(error) || isDailyLimit(error)) return JobOutcomes.skipped();
       throw error;
     }
   };

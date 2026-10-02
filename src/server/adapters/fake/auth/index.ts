@@ -1,6 +1,6 @@
 import 'server-only';
 
-export { CookieJar, parseCookieHeader, readRequestCookie, serializeSetCookie, toCookieHeader, withSetCookies } from './cookies';
+export { CookieJar, parseCookieHeader, readRequestCookie, serializeSetCookie, toCookieHeader, withSetCookies } from '@/server/security/cookies';
 export {
   DEFAULT_REFRESH_WINDOW_MS,
   DEFAULT_SESSION_TTL_MS,

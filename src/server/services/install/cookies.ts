@@ -12,9 +12,13 @@ import { deriveKey, hmacBase64Url, timingSafeEqualString } from '@/server/securi
 // SameSite=Lax and Secure (except on a plain-http loopback APP_URL in development, where browsers
 // would drop a Secure cookie).
 // - `ap_hs_state` (10 min, path = the callback): a random nonce, also sent to HubSpot as `state`;
-//   the callback accepts only the nonce its cookie carries (login CSRF on the install).
-// - `ap_pending_install` (24 h): `{accountId, installerEmail}` for `/onboarding/email` (M3), which
-//   pre-fills the installer's email. Signed, not encrypted: it lives in the installer's own browser.
+//   the callback accepts only the nonce its cookie carries (login CSRF on the install), and only
+//   once (a single-use marker in `rate_limits`, so a captured cookie and state cannot be replayed).
+// - `ap_pending_install` (24 h): `{accountId, installerEmail, installedAt}` for `/onboarding/email`
+//   (M3), which pre-fills the installer's email. Signed, not encrypted: it lives in the installer's
+//   own browser. `installedAt` is the install's `accounts.last_install_at`: a branch-(b) reinstall
+//   moves it, so M3 honours only the newest cookie (its update is conditional on
+//   `last_install_at = installedAt`, PLAN §9.1 (b): a reinstall restarts onboarding).
 
 export const STATE_COOKIE_NAME = 'ap_hs_state';
 export const STATE_COOKIE_TTL_MS = 10 * 60 * 1000;
@@ -94,12 +98,20 @@ export function issueStateCookie(env: Env, now: Date): { state: string; cookie: 
   return { state, cookie: cookie(env, STATE_COOKIE_NAME, value, HUBSPOT_OAUTH_CALLBACK_PATH, STATE_COOKIE_TTL_MS) };
 }
 
+/**
+ * The state's expiry when the cookie is genuine, unexpired and carries exactly the `state` HubSpot
+ * echoed back; null otherwise. The callback then spends the nonce once (callback.ts).
+ */
+export function readState(env: Env, cookieValue: string | undefined, state: string | null, now: Date): { expiresAt: Date } | null {
+  if (state === null || !NONCE.test(state)) return null;
+  const parsed = statePayload.safeParse(verifyCookieValue(cookieKey(env, 'state'), cookieValue));
+  if (!parsed.success || parsed.data.exp <= now.getTime()) return null;
+  return timingSafeEqualString(parsed.data.n, state) ? { expiresAt: new Date(parsed.data.exp) } : null;
+}
+
 /** True when the cookie is genuine, unexpired and carries exactly the `state` HubSpot echoed back. */
 export function verifyState(env: Env, cookieValue: string | undefined, state: string | null, now: Date): boolean {
-  if (state === null || !NONCE.test(state)) return false;
-  const parsed = statePayload.safeParse(verifyCookieValue(cookieKey(env, 'state'), cookieValue));
-  if (!parsed.success || parsed.data.exp <= now.getTime()) return false;
-  return timingSafeEqualString(parsed.data.n, state);
+  return readState(env, cookieValue, state, now) !== null;
 }
 
 /** Clears the state cookie (single use). */
@@ -115,12 +127,23 @@ export interface PendingInstall {
   readonly accountId: string;
   /** The introspected installer email (lower-cased), the default owner email; null when HubSpot gave none. */
   readonly installerEmail: string | null;
+  /**
+   * The install's `accounts.last_install_at` (the instant the callback wrote). Only the cookie of
+   * the newest install matches it: M3's `/onboarding/email` update must be guarded by
+   * `last_install_at = $installedAt`.
+   */
+  readonly installedAt: Date;
 }
 
-const pendingPayload = z.object({ a: z.uuid(), e: z.string().max(320).nullable(), exp: z.number().int() });
+const pendingPayload = z.object({ a: z.uuid(), e: z.string().max(320).nullable(), i: z.number().int().nonnegative(), exp: z.number().int() });
 
 export function issuePendingInstallCookie(env: Env, pending: PendingInstall, now: Date): SessionCookie {
-  const value = signCookieValue(cookieKey(env, 'pending'), { a: pending.accountId, e: pending.installerEmail, exp: now.getTime() + PENDING_INSTALL_TTL_MS });
+  const value = signCookieValue(cookieKey(env, 'pending'), {
+    a: pending.accountId,
+    e: pending.installerEmail,
+    i: pending.installedAt.getTime(),
+    exp: now.getTime() + PENDING_INSTALL_TTL_MS,
+  });
   return cookie(env, PENDING_INSTALL_COOKIE_NAME, value, '/', PENDING_INSTALL_TTL_MS);
 }
 
@@ -128,5 +151,5 @@ export function issuePendingInstallCookie(env: Env, pending: PendingInstall, now
 export function readPendingInstall(env: Env, cookieValue: string | undefined, now: Date): PendingInstall | null {
   const parsed = pendingPayload.safeParse(verifyCookieValue(cookieKey(env, 'pending'), cookieValue));
   if (!parsed.success || parsed.data.exp <= now.getTime()) return null;
-  return { accountId: parsed.data.a, installerEmail: parsed.data.e };
+  return { accountId: parsed.data.a, installerEmail: parsed.data.e, installedAt: new Date(parsed.data.i) };
 }

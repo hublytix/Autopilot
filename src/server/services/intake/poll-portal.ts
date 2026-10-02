@@ -6,6 +6,7 @@ import type { Db } from '@/server/db';
 import { publishJobs, raiseAlert } from '@/server/jobs';
 import { log } from '@/server/obs/log';
 import type { Deps, FormSubmission, SubmissionPage } from '@/server/ports';
+import { insertAuditOnce } from '@/server/services/audit';
 import { forAccount, type PortalHubSpotClient, type Sleep } from '@/server/services/hubspot';
 import { LeaseNames, withLease } from '@/server/services/leases';
 import { insertLead } from './insert-lead';
@@ -22,10 +23,14 @@ import { isTestAddressSubmission, loadInboxCheckWindows, type InboxCheckWindow }
 // 2. keep only submissions newer than the floor (`intake_floor_at`) and the overlap; skip inbox-check
 //    test addresses (counted as processed);
 // 3. for each new submission, oldest first: resolve the contact by email (a 404 waits for a later
-//    poll while the submission is under an hour old; after that, an audit entry without content
-//    and an alert, and it counts as processed); fill missing fields from the contact; insert the
-//    lead, its content and its lead_process job in one transaction; publish after commit;
-// 4. cursor = GREATEST(cursor, newest processed or skipped submittedAt).
+//    poll while the submission is under an hour old; after that, an audit entry (form id and
+//    instant only) and an alert, and it counts as processed); fill missing fields from the
+//    contact; insert the lead, its content and its lead_process job in one transaction; publish
+//    after commit;
+// 4. cursor = GREATEST(cursor, newest processed or skipped submittedAt), but always less than an
+//    hour past the oldest submission still waiting for its contact, so the next poll's overlap
+//    still reaches it (otherwise a newer submission at exactly +60 min, or HubSpot's clock running
+//    ahead of ours, could push it out unseen and its give-up would never be recorded).
 // Then `last_polled_at = $now`. Submissions already stored are recognised by their submission key
 // before any contact lookup, so the overlap costs one listing per form, not one lookup per lead.
 
@@ -250,16 +255,26 @@ async function pollForm(deps: Deps, client: PortalHubSpotClient, poll: FormPoll,
   const known = await knownSubmissionKeys(deps.db, accountId, formId, candidates.map((c) => c.key));
 
   let processedUpTo: Date | null = null;
+  let oldestPending: Date | null = null;
   for (const { submission, key } of candidates) {
     const outcome = await processSubmission(deps, client, poll, submission, key, known, counts);
     if (outcome === 'processed') processedUpTo = submission.submittedAt;
+    else oldestPending ??= submission.submittedAt;
   }
-  if (processedUpTo !== null) {
+  const cursor = cappedCursor(processedUpTo, oldestPending);
+  if (cursor !== null) {
     await deps.db.query(
       `update selected_forms set cursor_submitted_at = greatest(cursor_submitted_at, $3) where account_id = $1 and form_id = $2`,
-      [accountId, formId, processedUpTo],
+      [accountId, formId, cursor],
     );
   }
+}
+
+/** Step 4's cursor: the newest processed submission, kept under `oldest pending + overlap` (strictly). */
+export function cappedCursor(processedUpTo: Date | null, oldestPending: Date | null): Date | null {
+  if (processedUpTo === null || oldestPending === null) return processedUpTo;
+  const limit = oldestPending.getTime() + POLL_OVERLAP_MS - 1;
+  return processedUpTo.getTime() > limit ? new Date(limit) : processedUpTo;
 }
 
 /** `processed` moves the cursor (a lead, a known one, or a deliberate skip); `retry` leaves it to a later poll. */
@@ -298,7 +313,7 @@ async function processSubmission(
       return 'retry';
     }
     counts.contactMissing += 1;
-    await recordContactMissing(deps, { accountId, formId, submissionKey: key, submittedAt: submission.submittedAt });
+    await recordContactMissing(deps, { accountId, formId, submittedAt: submission.submittedAt });
     return 'processed';
   }
 
@@ -324,24 +339,25 @@ async function processSubmission(
 }
 
 /**
- * A submission whose contact never became visible within the overlap: one audit entry (ids and the
- * submission key only, never content) and one alert, however often later polls see it again.
+ * A submission whose contact never became visible within the overlap: one audit entry and one
+ * alert, however often later polls see it again. The entry holds the form id and the submission
+ * instant only: never content, and never the submission key, which without a conversion id is an
+ * HMAC of the lead's email (D-31) and would outlive the 30-day purge and a privacy deletion in a
+ * table neither touches. The form and instant identify the submission well enough to dedupe on.
  */
-async function recordContactMissing(
-  deps: Deps,
-  input: { accountId: string; formId: string; submissionKey: string; submittedAt: Date },
-): Promise<void> {
-  const meta = { formId: input.formId, submissionKey: input.submissionKey, submittedAt: input.submittedAt.toISOString() };
-  const rows = await deps.db.query(
-    `insert into audit_log (account_id, actor, action, level, meta)
-     select $1, 'system', 'intake.contact_not_found', 'warn', $2::jsonb
-      where not exists (
-        select 1 from audit_log
-         where account_id = $1 and action = 'intake.contact_not_found' and meta ->> 'submissionKey' = $3)
-     returning id`,
-    [input.accountId, meta, input.submissionKey],
+async function recordContactMissing(deps: Deps, input: { accountId: string; formId: string; submittedAt: Date }): Promise<void> {
+  const written = await insertAuditOnce(
+    deps.db,
+    {
+      accountId: input.accountId,
+      actor: 'system',
+      action: 'intake.contact_not_found',
+      level: 'warn',
+      meta: { formId: input.formId, submittedAt: input.submittedAt.toISOString() },
+    },
+    ['formId', 'submittedAt'],
   );
-  if (rows.length === 0) return;
+  if (!written) return;
   log.warn('submission contact not found', { event: 'intake.contact_not_found', accountId: input.accountId, formId: input.formId });
   raiseAlert('intake_contact_not_found', { accountId: input.accountId, formId: input.formId });
 }

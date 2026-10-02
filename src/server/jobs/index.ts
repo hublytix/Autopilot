@@ -9,7 +9,7 @@ import 'server-only';
 // `./sweeper` (the poll cron), and `./dispatcher` / `./failure` (the routes).
 export { onAlert, raiseAlert } from './alert';
 export type { AlertListener, RaisedAlert } from './alert';
-export { cancelJobs, cancelJobsInTx, cancelScheduledMessages, CancelFilterRequiredError } from './cancel';
+export { ACCOUNT_CANCEL_EXCEPT_KINDS, cancelJobs, cancelJobsInTx, cancelScheduledMessages, CancelFilterRequiredError } from './cancel';
 export type { CancelJobsFilter, CancelledJobs, JobCancelReason } from './cancel';
 export { assertJobOwned, claimJob } from './claim';
 export type { Registration, Registries } from './handlers';

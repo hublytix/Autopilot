@@ -1,9 +1,11 @@
 import 'server-only';
 import type { SessionCookie } from '@/server/ports/auth';
 
-// Cookie helpers for the fake AuthProvider and the HTTP layer: build `Set-Cookie` values, read the
-// `Cookie` header of a Request, and put cookies on a Response (copying it when its headers are
-// immutable, as on `Response.redirect()`).
+// Cookie helpers shared by the HTTP handlers and the AuthProvider adapters (fake now, live in M3):
+// build `Set-Cookie` values, read the `Cookie` header of a Request, and put cookies on a Response
+// (copying it when its headers are immutable, as on `Response.redirect()`). A neutral module, so
+// live code never depends on a fake adapter. CookieJar is the route tests' and the simulation's
+// "browser".
 
 const COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 // RFC 6265 cookie-octet: no controls, whitespace, `"`, `,`, `;` or `\`.

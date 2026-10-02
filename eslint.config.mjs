@@ -116,6 +116,7 @@ const DOMAIN_MSG = 'domain/ is pure: it may import only domain/, zod and luxon (
 const PORTS_MSG = 'ports/ contains types only: use `import type` (PLAN §3).';
 const ADAPTERS_MSG = 'adapters/ implement ports and never import services/ (PLAN §3).';
 const SERVICES_MSG = 'services/ take a Deps object and never import adapters/ (PLAN §3).';
+const HTTP_MSG = 'http/ handlers reach adapters only through Deps; shared helpers live in security/ or shared/ (PLAN §3).';
 const APP_MSG = 'src/app may import @/server/http, views, actions and container only; use `import type` for anything else (PLAN §3).';
 const CLIENT_MSG = 'components/ and shared/ are client-safe and must not import src/server (PLAN §3).';
 const PROXY_MSG = 'src/proxy.ts may import only the CSP builder and the AuthProvider session-refresh adapter; the proxy never touches the database (PLAN §3, §7.7).';
@@ -143,6 +144,7 @@ const ZONES = [
   },
   { files: ['src/server/adapters'], check: (t) => (t.path !== undefined && within(t.path, 'src/server/services') ? ADAPTERS_MSG : null) },
   { files: ['src/server/services'], check: (t) => (t.path !== undefined && within(t.path, 'src/server/adapters') ? SERVICES_MSG : null) },
+  { files: ['src/server/http'], check: (t) => (t.path !== undefined && within(t.path, 'src/server/adapters') ? HTTP_MSG : null) },
   {
     files: ['src/app'],
     check: (t) =>
@@ -288,6 +290,10 @@ const BOUNDARIES = [
   boundary('services', ['src/server/services/**'], [
     restrict('^@/server/adapters(?:/|$)', SERVICES_MSG),
     restrict('^(?:\\.\\./)+adapters(?:/|$)', SERVICES_MSG),
+  ]),
+  boundary('http', ['src/server/http/**'], [
+    restrict('^@/server/adapters(?:/|$)', HTTP_MSG),
+    restrict('^(?:\\.\\./)+adapters(?:/|$)', HTTP_MSG),
   ]),
   boundary('app', ['src/app/**'], [
     restrict('^@/server(?:/(?!(?:http|views|actions|container)(?:[/.]|$))|$)', APP_MSG),

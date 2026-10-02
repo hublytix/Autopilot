@@ -3,13 +3,17 @@ import type { Db } from '@/server/db';
 import type { Env } from '@/server/env';
 import { deriveKey, hmacHex } from '@/server/security/keys';
 
-// Fixed-window counters in Postgres (D-36): one `rate_limits` row per (key, window), keyed by an
-// HMAC of the limited thing (an IP and route, a portal and bucket) with the HKDF 'ratelimit' key, so
-// the table never holds an IP address or an email. One upsert per hit: the returned count includes
-// this hit. Old windows are pruned by the daily retention step (PLAN §9.10 step 7).
+// Fixed-window counters in Postgres (PLAN §3 "rate limit", D-36): one `rate_limits` row per (key,
+// window), keyed by an HMAC of the limited thing (an IP and route, a portal and bucket) with the
+// HKDF 'ratelimit' key, so the table never holds an IP address or an email. One upsert per hit:
+// the returned count includes this hit. Old windows are pruned by the daily retention step (PLAN
+// §9.10 step 7).
 //
-// Used by the per-portal HubSpot limiter and the install route's per-IP limit. The other public
-// routes' limits (M3, M7) can share it; it could move to src/server/security/ then.
+// claimOnce is the same row used as a once-only marker (a single-use OAuth state, one alert per
+// quota episode): the first caller creates it, every later one finds it.
+//
+// Used by the per-portal HubSpot limiter, the install and OAuth-callback per-IP limits, the OAuth
+// state's single use and the Resend quota alert. The other public routes' limits (M3, M7) share it.
 
 const keys = new WeakMap<Env, Buffer>();
 
@@ -46,4 +50,19 @@ export async function hitFixedWindow(db: Db, input: { keyHash: string; windowMs:
     [input.keyHash, windowStart],
   );
   return { count: row.count, windowStart, windowEnd: new Date(startMs + input.windowMs) };
+}
+
+/**
+ * A once-only marker: true for the first caller with this key and window start, false for every
+ * later one. `windowStart` is the episode the marker covers (a UTC day, the state's expiry…); the
+ * retention step prunes it like any old window.
+ */
+export async function claimOnce(db: Db, input: { keyHash: string; windowStart: Date }): Promise<boolean> {
+  const rows = await db.query(
+    `insert into rate_limits (key_hash, window_start, count) values ($1, $2, 1)
+     on conflict (key_hash, window_start) do nothing
+     returning count`,
+    [input.keyHash, input.windowStart],
+  );
+  return rows.length === 1;
 }

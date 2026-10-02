@@ -15,6 +15,10 @@ import { reserveInTx } from '@/server/services/notifications/reserve';
 //   tokens revoked),
 // - the `reconnect` reservation, key reconnect:{connection}:{status_changed_at}.
 // The email and the QStash cancels run after commit; a lost send is resumed by the sweeper.
+// Lock order (docs/ARCHITECTURE.md): the account row first, then the connection, like the OAuth
+// callback (which updates `accounts` before storing the connection), so the two never deadlock.
+// `FOR NO KEY UPDATE` is the lock an ordinary UPDATE of the row takes; it does not wait for the
+// key-share locks of rows being inserted with a foreign key to the account.
 // Used by the token manager (a refresh classified revoked) and, in M7, the daily introspection probe.
 
 export type RevokeReason = 'refresh_revoked' | 'introspection_inactive';
@@ -36,6 +40,7 @@ export type RevokeOutcome =
   | 'superseded';
 
 export async function revokeConnectionInTx(tx: Db, now: Date, input: RevokeConnectionInput): Promise<{ outcome: RevokeOutcome; work: PostCommitWork }> {
+  await tx.query(`select id from accounts where id = $1 for no key update`, [input.accountId]);
   const row = await tx.maybeOne<{ status_changed_at: Date }>(
     `update hubspot_connections
         set status = 'revoked', status_changed_at = $3, status_reason = $4,

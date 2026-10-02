@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { BillingInactive, billingInactiveSubject } from '@/emails/BillingInactive';
 import { OwnerAlert } from '@/emails/OwnerAlert';
-import { RECONNECT_HUBSPOT_SUBJECT, ReconnectHubSpot } from '@/emails/ReconnectHubSpot';
+import { ReconnectHubSpot, reconnectHubSpotSubject } from '@/emails/ReconnectHubSpot';
 import { renderEmail } from '@/server/email/render';
 import { createJobRegistry } from '@/server/jobs/registry';
 import { runSweeper } from '@/server/jobs/sweeper';
@@ -42,7 +42,8 @@ describe('templates', () => {
     const { html, text } = await renderEmail(
       createElement(ReconnectHubSpot, { productName: 'Hublytix Autopilot', reconnectUrl: 'https://app.example/api/hubspot/install', purgeDate: 'November 5, 2026' }),
     );
-    expect(RECONNECT_HUBSPOT_SUBJECT).toBe('Reconnect HubSpot to keep Autopilot running');
+    expect(reconnectHubSpotSubject('Hublytix Autopilot')).toBe('Reconnect HubSpot to keep Hublytix Autopilot running');
+    expect(reconnectHubSpotSubject('Acme Replies')).toBe('Reconnect HubSpot to keep Acme Replies running');
     expect(text).toContain('has stopped checking for new leads and drafting replies');
     expect(text).toContain('we delete your Hublytix Autopilot data for this HubSpot account on November 5, 2026');
     expect(text).toContain('Reconnect HubSpot https://app.example/api/hubspot/install');
@@ -99,7 +100,7 @@ describe('resuming reserved account emails (sweeper)', () => {
     await sweep();
     const reconnect = rig.fakes.mailer.sent.filter((mail) => mail.kind === 'reconnect');
     expect(reconnect).toHaveLength(1);
-    expect(reconnect[0]).toMatchObject({ to: ['owner@example.com'], subject: RECONNECT_HUBSPOT_SUBJECT });
+    expect(reconnect[0]).toMatchObject({ to: ['owner@example.com'], subject: reconnectHubSpotSubject(rig.deps.env.PRODUCT_NAME) });
 
     rig.clock.advance({ hours: 3 });
     await sweep();

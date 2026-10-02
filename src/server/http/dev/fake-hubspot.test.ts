@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CookieJar } from '@/server/adapters/fake/auth/cookies';
+import { CookieJar } from '@/server/security/cookies';
 import { createJobRegistry } from '@/server/jobs/registry';
 import { createJobTestRig, type JobTestRig } from '@/server/jobs/testing';
 import { REQUIRED_SCOPES } from '@/server/hubspot/scopes';

@@ -6,6 +6,7 @@ import type { JobRow } from '@/server/jobs/types';
 import { log } from '@/server/obs/log';
 import type { Deps, MailTag, OutgoingMail } from '@/server/ports';
 import { mintActionTokens, revokeTokens, type MintedTokens } from '@/server/security/action-tokens';
+import { claimOnce, rateLimitKeyHash } from '@/server/security/rate-limit';
 import { canTakeOver } from './predicates';
 import { defaultNotificationRegistry, type NotificationRegistry } from './renderers';
 import { failReservation, getNotification, reserveInTx, takeOver } from './reserve';
@@ -18,12 +19,34 @@ import type { NotificationRow, NotificationSendPlan, ReserveAndSendInput, SendRe
 //      `failed` or no row at all → skip;
 //   3. mint the button tokens and count the attempt, and COMMIT, before sending;
 //   4. Mailer.send with idempotency key `{ENV_NAMESPACE}:{dedupe_key}`: a transient error leaves the
-//      row `sending` and throws (the job retries; the sweeper resumes); a permanent one fails the row,
+//      row `sending` and throws (the job retries; the sweeper resumes; a Resend quota error raises
+//      one admin alert per quota episode, D-36: per UTC day for the daily quota, per UTC month for
+//      the monthly one, however many sends and retries hit it); a permanent one fails the row,
 //      revokes the new tokens and raises one alert; Resend's 409 on our own key means an earlier
 //      attempt's email already went out: the row is marked sent and the new tokens revoked;
 //   5. in one transaction: `sent` + the caller's onSent (lead timestamp, follow-up job rows).
 
 const QUOTA_CODES: ReadonlySet<string> = new Set(['daily_quota_exceeded', 'monthly_quota_exceeded']);
+
+/** The start of the quota episode `code` belongs to: the UTC day (daily quota) or month (monthly). */
+export function quotaEpisodeStart(code: string, now: Date): Date {
+  const day = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return code === 'monthly_quota_exceeded' ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)) : new Date(day);
+}
+
+/** One `resend_quota_exceeded` alert per episode (D-36); a failing marker write alerts anyway. */
+async function alertQuotaOnce(deps: Deps, code: string, notificationKind: string): Promise<void> {
+  let first = true;
+  try {
+    first = await claimOnce(deps.db, {
+      keyHash: rateLimitKeyHash(deps.env, `resend_quota:${code}`),
+      windowStart: quotaEpisodeStart(code, deps.clock.now()),
+    });
+  } catch (error) {
+    log.warn('quota alert marker not written', { event: 'notification.quota_marker_failed', code: errorCode(error) });
+  }
+  if (first) raiseAlert('resend_quota_exceeded', { notificationKind, errorCode: code });
+}
 
 function skipped(reason: Extract<SendResult, { status: 'skipped' }>['reason']): SendResult {
   return { status: 'skipped', reason };
@@ -156,7 +179,7 @@ async function deliver(deps: Deps, row: NotificationRow, plan: NotificationSendP
       providerMessageId = null;
       viaIdempotencyConflict = true;
     } else if (isRetryable(error)) {
-      if (QUOTA_CODES.has(error.code)) raiseAlert('resend_quota_exceeded', { notificationKind: row.kind, errorCode: error.code });
+      if (QUOTA_CODES.has(error.code)) await alertQuotaOnce(deps, error.code, row.kind);
       log.warn('notification send failed transiently', {
         event: 'notification.transient',
         notificationKind: row.kind,

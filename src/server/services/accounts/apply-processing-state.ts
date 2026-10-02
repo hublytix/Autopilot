@@ -5,7 +5,7 @@ import { computeProcessingState } from '@/server/domain/processing-state';
 import { ACCOUNT_PROCESSING_STATES, CONNECTION_STATUSES, type AccountProcessingState } from '@/server/domain/types';
 import type { Db } from '@/server/db';
 import { raiseAlert } from '@/server/jobs/alert';
-import { cancelJobsInTx } from '@/server/jobs/cancel';
+import { ACCOUNT_CANCEL_EXCEPT_KINDS, cancelJobsInTx } from '@/server/jobs/cancel';
 import { log } from '@/server/obs/log';
 import type { Deps } from '@/server/ports';
 import { revokeTokens } from '@/server/security/action-tokens';
@@ -29,7 +29,8 @@ import { NO_POST_COMMIT_WORK, runPostCommitWork, type PostCommitWork } from './p
 //                               disconnected_at are cleared;
 //    → inactive (from any):     the billing_inactive email is reserved, key
 //                               billing-inactive:{acct}:{entitlement_lost_at};
-//    → revoked / disconnected:  purge_after = $now + 30 d; jobs cancelled; action tokens revoked;
+//    → revoked / disconnected:  purge_after = $now + 30 d; jobs cancelled (except privacy deletions,
+//                               which run whatever the state, D-06); action tokens revoked;
 //    → paused, → onboarding:    nothing (pending follow-ups fail their reservation predicates).
 // The emails and QStash cancels run after commit (runPostCommitWork).
 
@@ -168,7 +169,7 @@ async function runTransition(tx: Db, input: TransitionInput): Promise<PostCommit
           where id = $1`,
         [accountId, purgeAfter, input.next === 'disconnected', now],
       );
-      const cancelled = await cancelJobsInTx(tx, { accountId, reason: input.next, now });
+      const cancelled = await cancelJobsInTx(tx, { accountId, exceptKinds: ACCOUNT_CANCEL_EXCEPT_KINDS, reason: input.next, now });
       await revokeTokens(tx, { accountId, now });
       return { sends: [], cancelled: [cancelled] };
     }

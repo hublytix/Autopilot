@@ -1,18 +1,23 @@
 import 'server-only';
 import { TransientError } from '@/server/domain/errors';
 import type { Deps } from '@/server/ports';
-import { hitFixedWindow, rateLimitKeyHash } from './fixed-window';
+import { hitFixedWindow, rateLimitKeyHash } from '@/server/security/rate-limit';
 import { realSleep, type Sleep } from './token-manager';
 
-// The per-portal HubSpot limiter (D-36, HS-RATE-LIMITS): at most 9 requests per second in general
-// and 4 per second for CRM search, below HubSpot's 110 per 10 s and 5 per second, counted in
-// Postgres so every function instance shares the budget. Fixed one-second windows keyed by
-// HMAC('hubspot:' + portalId + ':' + bucket). A caller over the limit waits for the next window and
-// tries again; after MAX_WAITS windows it gives up with a TransientError (the job retries later).
+// The per-portal HubSpot limiter (D-36, HS-RATE-LIMITS), counted in Postgres so every function
+// instance shares the budget. Fixed one-second windows keyed by HMAC('hubspot:' + portalId + ':' +
+// bucket). Aligned windows let up to twice a window's limit through in any rolling second (the end
+// of one window plus the start of the next), so each limit is set for the rolling bound:
+// - general: 9 per window → at most 99 in any rolling 10 s (11 windows), under HubSpot's 110 per 10 s;
+// - search: 2 per window → at most 4 in any rolling second, under HubSpot's 5 per second (D-36's
+//   ≤ 4 req/s; the research allows 2–4).
+// A caller over the limit waits for the next window and tries again; after MAX_WAITS windows it
+// gives up with a TransientError (the job retries later).
 
 export type PortalBucket = 'general' | 'search';
 
-export const PORTAL_RATE_LIMITS: Readonly<Record<PortalBucket, number>> = { general: 9, search: 4 };
+/** Per one-second window (see above for the rolling bounds). */
+export const PORTAL_RATE_LIMITS: Readonly<Record<PortalBucket, number>> = { general: 9, search: 2 };
 export const PORTAL_WINDOW_MS = 1000;
 export const PORTAL_LIMITER_MAX_WAITS = 30;
 

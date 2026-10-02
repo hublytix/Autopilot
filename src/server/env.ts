@@ -1,5 +1,6 @@
 import 'server-only';
 import { z } from 'zod';
+import { HUBSPOT_OAUTH_CALLBACK_PATH, HUBSPOT_WEBHOOK_PATH } from '@/server/hubspot/scopes';
 import { tryDecodeKey } from '@/server/security/crypto';
 
 // Environment (PLAN §14, D-29, D-51). Parsed lazily by getEnv(), never at import time, so
@@ -15,10 +16,13 @@ import { tryDecodeKey } from '@/server/security/crypto';
 // - fake: missing values are filled with the documented fake values (FAKE_ENV), which live mode
 //   refuses. Fake mode is refused on Vercel production/preview unless ALLOW_FAKE_ON_VERCEL=1.
 //   Wherever fake mode can be reached by others (a Vercel production/preview deployment, or an
-//   APP_URL that is not a loopback origin), APP_SECRET and TOKEN_ENCRYPTION_KEY must be set to
-//   real, non-fake values: the fake ones are public, and the fake session cookie is signed with a
-//   key derived from APP_SECRET. The /dev routes must then also sit behind Vercel deployment
-//   protection (D-29).
+//   APP_URL that is not a loopback origin), every secret that authenticates a request must be set
+//   to a real, non-fake value, because the fake ones are public: APP_SECRET (the fake session
+//   cookie is signed with a key derived from it), TOKEN_ENCRYPTION_KEY, HUBSPOT_CLIENT_SECRET
+//   (signs /api/hubspot/webhooks: a forged contact.privacyDeletion would wipe a lead's content),
+//   QSTASH_CURRENT/NEXT_SIGNING_KEY (sign /api/jobs/run, /api/jobs/failed and QStash cron calls)
+//   and CRON_SECRET (/api/cron/*). The fakes sign with the env values, so fake mode still works.
+//   The /dev routes must then also sit behind Vercel deployment protection (D-29).
 // Errors name the variable and the problem, never the value.
 
 export type AppMode = 'fake' | 'live';
@@ -69,8 +73,8 @@ export const FAKE_ENV = {
   HUBSPOT_CLIENT_ID: 'fake-hubspot-client-id',
   HUBSPOT_CLIENT_SECRET: 'fake-hubspot-client-secret',
   HUBSPOT_APP_ID: '7100001',
-  HUBSPOT_REDIRECT_URI: `${FAKE_APP_URL}/api/hubspot/oauth/callback`,
-  HUBSPOT_WEBHOOK_TARGET_URL: `${FAKE_APP_URL}/api/hubspot/webhooks`,
+  HUBSPOT_REDIRECT_URI: `${FAKE_APP_URL}${HUBSPOT_OAUTH_CALLBACK_PATH}`,
+  HUBSPOT_WEBHOOK_TARGET_URL: `${FAKE_APP_URL}${HUBSPOT_WEBHOOK_PATH}`,
   QSTASH_URL: 'https://fake-only.qstash.invalid',
   QSTASH_TOKEN: 'fake-only-qstash-token',
   QSTASH_CURRENT_SIGNING_KEY: 'sig_fakeonlycurrentsigningkey',
@@ -290,10 +294,10 @@ function fill(source: EnvSource, mode: AppMode | undefined): Record<string, stri
     // The fake HubSpot URLs follow a custom APP_URL (e.g. another local port).
     const appUrl = parseUrl(filled.APP_URL ?? '')?.origin;
     if (appUrl !== undefined && present(source.HUBSPOT_REDIRECT_URI) === undefined) {
-      filled.HUBSPOT_REDIRECT_URI = `${appUrl}/api/hubspot/oauth/callback`;
+      filled.HUBSPOT_REDIRECT_URI = `${appUrl}${HUBSPOT_OAUTH_CALLBACK_PATH}`;
     }
     if (appUrl !== undefined && present(source.HUBSPOT_WEBHOOK_TARGET_URL) === undefined) {
-      filled.HUBSPOT_WEBHOOK_TARGET_URL = `${appUrl}/api/hubspot/webhooks`;
+      filled.HUBSPOT_WEBHOOK_TARGET_URL = `${appUrl}${HUBSPOT_WEBHOOK_PATH}`;
     }
   }
   return filled;
@@ -314,6 +318,16 @@ function qstashRegionVariables(source: EnvSource): string[] {
     .sort();
 }
 
+/** Secrets that must be real wherever fake mode is reachable by others (see the header). */
+export const REACHABLE_FAKE_SECRETS = [
+  'APP_SECRET',
+  'TOKEN_ENCRYPTION_KEY',
+  'HUBSPOT_CLIENT_SECRET',
+  'QSTASH_CURRENT_SIGNING_KEY',
+  'QSTASH_NEXT_SIGNING_KEY',
+  'CRON_SECRET',
+] as const satisfies readonly EnvName[];
+
 /** Checks that need only the raw values and the mode. */
 function modeIssues(mode: AppMode, raw: Record<string, string | undefined>, source: EnvSource): string[] {
   const issues: string[] = [];
@@ -323,11 +337,13 @@ function modeIssues(mode: AppMode, raw: Record<string, string | undefined>, sour
     if (onVercel && raw.ALLOW_FAKE_ON_VERCEL !== '1') {
       issues.push(`APP_MODE: fake mode is refused on Vercel ${vercelEnv} unless ALLOW_FAKE_ON_VERCEL=1`);
     }
-    // Reachable by others: the public fake keys would let anyone forge a session (or read tokens).
+    // Reachable by others: the public fake keys would let anyone forge a session, read tokens, or
+    // sign webhooks, job deliveries and cron calls.
     if (onVercel || !isLoopbackOrigin(raw.APP_URL)) {
-      for (const name of ['APP_SECRET', 'TOKEN_ENCRYPTION_KEY'] as const) {
+      for (const name of REACHABLE_FAKE_SECRETS) {
         const value = present(source[name]);
-        if (value === undefined || looksFake(name, value)) {
+        const publicDevKey = value !== undefined && QSTASH_DEV_SIGNING_KEYS.has(value);
+        if (value === undefined || looksFake(name, value) || publicDevKey) {
           issues.push(`${name}: fake mode on a Vercel deployment or a non-loopback APP_URL needs a real, non-fake value`);
         }
       }
@@ -405,8 +421,16 @@ function crossIssues(env: z.output<typeof envSchema>): string[] {
     const value = env[name];
     if (value !== undefined && parseUrl(value)?.protocol !== 'https:') issues.push(`${name}: must use https in live mode`);
   }
-  if (parseUrl(env.HUBSPOT_REDIRECT_URI)?.origin !== env.APP_URL) {
+  // The state cookie is scoped to the callback path, and HubSpot signs webhooks for the exact target
+  // URL: anything else fails every install ('state') or every webhook (bad signature) at runtime.
+  const redirect = parseUrl(env.HUBSPOT_REDIRECT_URI);
+  if (redirect?.origin !== env.APP_URL) {
     issues.push('HUBSPOT_REDIRECT_URI: must be on the APP_URL origin');
+  } else if (redirect.pathname !== HUBSPOT_OAUTH_CALLBACK_PATH || redirect.search !== '' || redirect.hash !== '') {
+    issues.push(`HUBSPOT_REDIRECT_URI: must be APP_URL + ${HUBSPOT_OAUTH_CALLBACK_PATH}, without a query or fragment`);
+  }
+  if (env.HUBSPOT_WEBHOOK_TARGET_URL !== `${env.APP_URL}${HUBSPOT_WEBHOOK_PATH}`) {
+    issues.push(`HUBSPOT_WEBHOOK_TARGET_URL: must be APP_URL + ${HUBSPOT_WEBHOOK_PATH}`);
   }
   if (parseUrl(env.DATABASE_URL)?.port !== '6543') {
     issues.push('DATABASE_URL: must be the Supabase transaction pooler (port 6543, D-28)');

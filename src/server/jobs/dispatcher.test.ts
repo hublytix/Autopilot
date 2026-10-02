@@ -4,9 +4,9 @@ import type { Deps, PublishRequest } from '@/server/ports';
 import { NotificationKeys, NotificationPredicates, reserveAndSend } from '@/server/services/notifications';
 import { useTestDb as setUpTestDb } from '../../../test/db/harness';
 import { onAlert, type RaisedAlert } from './alert';
-import { claimJob } from './claim';
+import { claimJob, finishJob, releaseJob } from './claim';
 import { runJob } from './dispatcher';
-import { handleFailureCallback } from './failure';
+import { failJobIfUnchanged, handleFailureCallback } from './failure';
 import { dedupeIdFor, insertJob, publishJobs, RepublishDeduplicatedError } from './outbox';
 import { createJobRegistry, type JobRegistry } from './registry';
 import { republishJob } from './republish';
@@ -444,3 +444,60 @@ describe('re-publish', () => {
     expect(fakes.scheduler.pending()).toHaveLength(1);
   });
 });
+
+// Sequential replays (PLAN §12 "Locking and race semantics"): crash and redelivery, concurrent hops,
+// a sweeper racing a delivery. Each guarded write must change nothing for the loser.
+describe('sequential replays of claims and re-publishes', () => {
+  it('a crashed attempt’s late finish or release changes nothing once another attempt has claimed the job', async () => {
+    const { deps } = rig;
+    const job = await scheduleJob(deps);
+    expect(await claimJob(deps.db, job.id, 'attempt-a', deps.clock.now())).toMatchObject({ attemptId: 'attempt-a' });
+    rig.clock.advance({ minutes: 7 });
+    expect(await claimJob(deps.db, job.id, 'attempt-b', deps.clock.now())).toMatchObject({ attemptId: 'attempt-b', attempts: 2 });
+
+    expect(await finishJob(deps.db, job, 'attempt-a', 'done', deps.clock.now())).toBe(false);
+    expect(await finishJob(deps.db, job, 'attempt-a', 'failed', deps.clock.now(), 'late_error')).toBe(false);
+    expect(await releaseJob(deps.db, job, 'attempt-a', 'late_error')).toBe(false);
+    expect(await getJob(deps.db, job.id)).toMatchObject({ status: 'running', attemptId: 'attempt-b', lastErrorCode: null });
+    expect(await finishJob(deps.db, job, 'attempt-b', 'done', deps.clock.now())).toBe(true);
+  });
+
+  it('two re-publishes from the same stale hops: only the first moves the job, and one :h1 message exists', async () => {
+    const { deps, fakes } = rig;
+    const job = await scheduleJob(deps);
+    const later = new Date(deps.clock.now().getTime() + 30 * MINUTE);
+    expect(await republishJob(deps, job, later, { type: 'hops', hops: 0 })).not.toBeNull();
+    expect(await republishJob(deps, job, later, { type: 'hops', hops: 0 })).toBeNull();
+    expect(await getJob(deps.db, job.id)).toMatchObject({ hops: 1, runAt: later });
+    expect(fakes.scheduler.pending().map((m) => m.dedupeId).filter((id) => id.includes(':h'))).toEqual(['fake-local:poll:test:1:h1']);
+  });
+
+  it('the sweeper’s fail compare-and-set loses to a re-publish that moved the job meanwhile', async () => {
+    const { deps } = rig;
+    const stale = await scheduleJob(deps);
+    expect(await republishJob(deps, stale, deps.clock.now(), { type: 'hops', hops: 0 })).not.toBeNull();
+    expect(await failJobIfUnchanged(deps, stale)).toBeNull();
+    expect(await getJob(deps.db, stale.id)).toMatchObject({ status: 'scheduled', hops: 1 });
+  });
+
+  it('a final transient delivery that lost its lease runs no failure path and fails nothing', async () => {
+    const { deps } = rig;
+    const failures: string[] = [];
+    registry.registerFailurePath('portal_poll', async (_deps, _job, info) => {
+      failures.push(info.reason);
+    });
+    registry.register('portal_poll', async (_deps, job) => {
+      // The attempt stalls past its lease; QStash's redelivery claims the job meanwhile.
+      rig.clock.advance({ minutes: 7 });
+      await claimJob(deps.db, job.id, 'attempt-b', rig.clock.now());
+      throw new TransientError('hubspot_server_error');
+    });
+    const job = await scheduleJob(deps);
+    const result = await runJob(deps, { jobId: job.id, messageId: job.externalId, retried: 4 }, registry);
+    expect(result).toEqual({ status: 200, outcome: 'lease_lost' });
+    expect(failures).toEqual([]);
+    expect(alerts.filter((a) => a.code === 'job_failed')).toEqual([]);
+    expect(await getJob(deps.db, job.id)).toMatchObject({ status: 'running', attemptId: 'attempt-b' });
+  });
+});
+

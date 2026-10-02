@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { insertJob, publishJobs } from '@/server/jobs';
+import type { HubSpotClient } from '@/server/ports';
 import { mintActionTokens, verifyActionToken } from '@/server/security/action-tokens';
 import { pollPortal } from '@/server/services/intake';
+import { revokeConnection } from '@/server/services/hubspot';
 import { privacyDelete } from '@/server/services/privacy';
 import { useTestDb as setUpTestDb } from '../db/harness';
 import { createIntakeRig, deliverWebhook, HOUR, jobsOf, leadsOf, MINUTE, type IntakeRig } from './support';
@@ -129,6 +131,30 @@ describe('privacy_delete', () => {
     expect(leads.find((lead) => lead.id === seeded.mayaLead)).toMatchObject({ stop_reason: null, submission_key: seeded.oldKeys.get(seeded.mayaLead) });
   });
 
+  it('still runs when the connection is revoked after the deletion was queued (D-06: whatever the state)', async () => {
+    const seeded = await seedLeads();
+    const response = await deliverWebhook(rig, [{ subscriptionType: 'contact.privacyDeletion', objectId: '102' }]);
+    expect(await response.json()).toMatchObject({ privacyDeletesQueued: 1 });
+
+    // Before QStash delivers the job, a refresh comes back revoked: the account-wide cancel runs.
+    const connection = await getDb().one<{ token_version: number }>(`select token_version from hubspot_connections where id = $1`, [rig.connectionId]);
+    const outcome = await revokeConnection(rig.deps, {
+      accountId: rig.accountId,
+      connectionId: rig.connectionId,
+      tokenVersion: connection.token_version,
+      reason: 'refresh_revoked',
+    });
+    expect(outcome).toBe('revoked');
+    const followup = await getDb().one<{ status: string }>(`select status from scheduled_jobs where id = $1`, [seeded.followupJobId]);
+    expect(followup.status).toBe('cancelled');
+    expect((await jobsOf(getDb(), 'privacy_delete')).map((job) => job.status)).toEqual(['scheduled']);
+
+    await rig.fakes.scheduler.runDue(rig.clock.now());
+    expect((await jobsOf(getDb(), 'privacy_delete')).map((job) => job.status)).toEqual(['done']);
+    expect(await contentCount(seeded.tomLeads)).toBe(0);
+    expect(await contentCount([seeded.mayaLead])).toBe(1);
+  });
+
   it('is idempotent: a replay finds nothing left to remove', async () => {
     const seeded = await seedLeads();
     const first = await privacyDelete(rig.deps, { accountId: rig.accountId, contactId: '102' });
@@ -136,6 +162,45 @@ describe('privacy_delete', () => {
     const again = await privacyDelete(rig.deps, { accountId: rig.accountId, contactId: '102' });
     expect(again).toMatchObject({ leads: 2, messagesDeleted: 0, tokensRevoked: 0, jobsCancelled: 0 });
     expect(await contentCount([seeded.mayaLead])).toBe(1);
+  });
+
+  it('a contact deleted while a poll was resolving it never becomes a lead (the deletion ran first, finding none)', async () => {
+    rig.hubspot.submitForm({ formId: rig.contactUs, email: 'tom.reyes@example.org', message: 'Faucets, please.', at: rig.clock.now() });
+    rig.clock.advance(MINUTE);
+    const real = rig.deps.hubspot;
+    let raced = false;
+    // Sequential replay of the race: the poll resolves the contact, then the privacy webhook arrives
+    // and its job runs (no lead yet), then the poll inserts.
+    const hubspot = new Proxy<HubSpotClient>(real, {
+      get(target, prop) {
+        if (prop === 'getContact') {
+          return async (...args: Parameters<HubSpotClient['getContact']>) => {
+            const contact = await target.getContact(...args);
+            if (!raced) {
+              raced = true;
+              await deliverWebhook(rig, [{ subscriptionType: 'contact.privacyDeletion', objectId: '102' }]);
+              await rig.fakes.scheduler.runDue(rig.clock.now());
+            }
+            return contact;
+          };
+        }
+        const value: unknown = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+    const result = await pollPortal({ ...rig.deps, hubspot }, rig.accountId, 'cron', { sleep: rig.sleep });
+    expect(raced).toBe(true);
+    expect((await jobsOf(getDb(), 'privacy_delete')).map((job) => job.status)).toEqual(['done']);
+    expect(result).toMatchObject({ status: 'polled', counts: { leadsCreated: 0 } });
+    expect(await leadsOf(getDb(), rig.accountId)).toEqual([]);
+    expect(await getDb().query(`select lead_id from lead_messages`)).toEqual([]);
+    expect(await jobsOf(getDb(), 'lead_process')).toEqual([]);
+
+    // Another contact's lead is unaffected.
+    rig.hubspot.submitForm({ formId: rig.quote, email: 'maya.okafor@example.com', message: 'Water heater.', at: rig.clock.now() });
+    rig.clock.advance(MINUTE);
+    await pollPortal(rig.deps, rig.accountId, 'cron', { sleep: rig.sleep });
+    expect((await leadsOf(getDb(), rig.accountId)).map((lead) => lead.hubspot_contact_id)).toEqual(['101']);
   });
 
   it('a deleted contact is not re-ingested by later polls', async () => {

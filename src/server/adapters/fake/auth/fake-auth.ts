@@ -6,7 +6,7 @@ import { isAuthOtpType, type AuthOtpType } from '@/server/domain/types';
 import type { AuthProvider, AuthUser, RefreshedSession, SessionCookie, VerifiedSession } from '@/server/ports/auth';
 import type { Clock } from '@/server/ports/clock';
 import { hmacBase64Url, timingSafeEqualString } from '@/server/security/keys';
-import { readRequestCookie, withSetCookies } from './cookies';
+import { readRequestCookie, withSetCookies } from '@/server/security/cookies';
 
 export const SESSION_COOKIE_NAME = 'ap_session';
 /** A magic link is valid for 1 hour (D-22). */

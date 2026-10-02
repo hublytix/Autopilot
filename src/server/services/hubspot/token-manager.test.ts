@@ -9,7 +9,7 @@ import { createJobTestRig, seedAccount, seedSettings, type JobTestRig } from '@/
 import { classifyRefreshFailure } from '@/server/hubspot/refresh-classifier';
 import type { Deps, TokenSet } from '@/server/ports';
 import { hubspotTokenAad } from '@/server/security/crypto';
-import { RECONNECT_HUBSPOT_SUBJECT } from '@/emails/ReconnectHubSpot';
+import { reconnectHubSpotSubject } from '@/emails/ReconnectHubSpot';
 import { PURGE_AFTER_MS } from '@/server/services/accounts/apply-processing-state';
 import { seedInstalledConnection, seedOwner } from '@/server/services/accounts/testing';
 import { useTestDb as setUpTestDb } from '../../../../test/db/harness';
@@ -273,7 +273,7 @@ describe('getAccessToken: refresh failures with exact HubSpot fixtures (D-11)', 
 
     const reconnect = rig.fakes.mailer.sent.filter((mail) => mail.kind === 'reconnect');
     expect(reconnect).toHaveLength(1);
-    expect(reconnect[0]).toMatchObject({ subject: RECONNECT_HUBSPOT_SUBJECT, to: ['owner@brightside-plumbing.example'] });
+    expect(reconnect[0]).toMatchObject({ subject: reconnectHubSpotSubject(deps.env.PRODUCT_NAME), to: ['owner@brightside-plumbing.example'] });
     expect(reconnect[0]?.idempotencyKey).toBe(`${deps.env.ENV_NAMESPACE}:reconnect:${connectionId}:${row.status_changed_at.toISOString()}`);
     expect(reconnect[0]?.text).toContain('stopped checking for new leads');
     expect(reconnect[0]?.text).toContain(`${deps.env.APP_URL}/api/hubspot/install`);
@@ -292,6 +292,38 @@ describe('getAccessToken: refresh failures with exact HubSpot fixtures (D-11)', 
     expireAccessToken();
     await expect(getAccessToken(deps, accountId, { sleep })).rejects.toBeInstanceOf(RevokedError);
     expect((await connection()).status).toBe('revoked');
+  });
+
+  it('a revoked refresh superseded by a reconnect revokes nothing: the caller retries with the new tokens', async () => {
+    const db = getDb();
+    const now = rig.clock.now();
+    const job = await insertJob(db, { kind: 'portal_poll', accountId, dedupeKey: `poll:${accountId}:2:a`, runAt: now, now });
+    await publishJobs(deps, [job]);
+    expireAccessToken();
+    // HubSpot answers the old refresh token with invalid_grant; meanwhile the owner reconnects
+    // (callback branch (c)): fresh tokens stored and token_version bumped, before the revoke runs.
+    vi.spyOn(hubspot, 'refresh').mockImplementation(async () => {
+      const fresh = hubspot.installTokens();
+      const encrypted = encryptTokens(deps.env, connectionId, fresh);
+      await db.query(
+        `update hubspot_connections set access_token_enc = $2, refresh_token_enc = $3, access_expires_at = $4, token_version = token_version + 1
+          where id = $1`,
+        [connectionId, encrypted.accessTokenEnc, encrypted.refreshTokenEnc, new Date(rig.clock.now().getTime() + 30 * MINUTE)],
+      );
+      throw refreshError('revoked', REFRESH_WIRE.badRefreshToken);
+    });
+
+    const error = await getAccessToken(deps, accountId, { sleep }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TransientError);
+    expect((error as TransientError).code).toBe('hubspot_refresh_superseded');
+    expect(await connection()).toMatchObject({ status: 'active', token_version: 2, refresh_lease_id: null, status_reason: null });
+    const account = await db.one<{ processing_state: string; purge_after: Date | null }>(`select processing_state, purge_after from accounts where id = $1`, [accountId]);
+    expect(account).toEqual({ processing_state: 'active', purge_after: null });
+    expect((await db.one<{ status: string }>(`select status from scheduled_jobs where id = $1`, [job?.id])).status).toBe('scheduled');
+    expect(await db.query(`select id from notifications_sent`)).toEqual([]);
+    expect(rig.fakes.mailer.sent).toEqual([]);
+    // The retry uses the reconnect's tokens without another refresh.
+    expect((await getAccessToken(deps, accountId, { sleep })).tokenVersion).toBe(2);
   });
 
   it('invalid_client → config: one alert per episode, the connection stays active, the lease is released', async () => {

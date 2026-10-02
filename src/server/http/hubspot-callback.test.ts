@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CookieJar } from '@/server/adapters/fake/auth/cookies';
+import { CookieJar } from '@/server/security/cookies';
 import { onAlert, type RaisedAlert } from '@/server/jobs/alert';
 import { createJobRegistry } from '@/server/jobs/registry';
 import { createJobTestRig, type JobTestRig } from '@/server/jobs/testing';
 import { REQUIRED_SCOPES } from '@/server/hubspot/scopes';
+import { mintActionTokens, verifyActionToken } from '@/server/security/action-tokens';
 import { seedOwner, seedSelectedForm } from '@/server/services/accounts/testing';
+import { revokeConnection } from '@/server/services/hubspot/revoke';
 import { decryptAccessToken } from '@/server/services/hubspot/tokens';
 import type { ReconnectMagicLinkInput } from '@/server/services/install/reconnect-magic-link';
 import { PENDING_INSTALL_COOKIE_NAME, readPendingInstall, STATE_COOKIE_NAME } from '@/server/services/install/cookies';
@@ -162,6 +164,7 @@ describe('callback branch (a): a new portal', () => {
     expect(readPendingInstall(rig.deps.env, res.headers.getSetCookie().find((c) => c.startsWith(PENDING_INSTALL_COOKIE_NAME))?.split(';')[0]?.split('=')[1], now)).toEqual({
       accountId,
       installerEmail: INSTALLER,
+      installedAt: now,
     });
     rig.clock.advance({ hours: 24 });
     const jarValue = setCookies.find((c) => c.startsWith(PENDING_INSTALL_COOKIE_NAME))?.split(';')[0]?.split('=')[1];
@@ -209,7 +212,11 @@ describe('callback branch (b): an existing portal nobody has bound', () => {
     const jar = new CookieJar();
     const { res } = await install(jar);
     expect(locationOf(res)).toBe(url('/onboarding/email'));
-    expect(readPendingInstall(rig.deps.env, jar.get(PENDING_INSTALL_COOKIE_NAME), rig.clock.now())).toEqual({ accountId, installerEmail: INSTALLER });
+    expect(readPendingInstall(rig.deps.env, jar.get(PENDING_INSTALL_COOKIE_NAME), rig.clock.now())).toEqual({
+      accountId,
+      installerEmail: INSTALLER,
+      installedAt: rig.clock.now(),
+    });
 
     const rows = await accounts();
     expect(rows).toHaveLength(1);
@@ -228,6 +235,53 @@ describe('callback branch (b): an existing portal nobody has bound', () => {
     expect(after.token_version).toBe(2);
     expect(after.access_token_enc).not.toBe(before.access_token_enc);
     expect(after.status).toBe('active');
+  });
+});
+
+describe('callback branch (b): only the newest install’s pending_install matches the account', () => {
+  it('an earlier installer’s cookie carries an install instant the reinstall moved on from (M3 guards on it)', async () => {
+    const jarA = new CookieJar();
+    await install(jarA);
+    rig.clock.advance({ hours: 2 });
+    const jarB = new CookieJar();
+    await install(jarB);
+    const [account] = await accounts();
+    const now = rig.clock.now();
+    const a = readPendingInstall(rig.deps.env, jarA.get(PENDING_INSTALL_COOKIE_NAME), now);
+    const b = readPendingInstall(rig.deps.env, jarB.get(PENDING_INSTALL_COOKIE_NAME), now);
+    // Both are still within 24 h and name the same account…
+    expect(a?.accountId).toBe(account?.id);
+    expect(b?.accountId).toBe(account?.id);
+    // …but only B's install instant is the account's last_install_at.
+    expect(b?.installedAt).toEqual(account?.last_install_at);
+    expect(a?.installedAt).not.toEqual(account?.last_install_at);
+  });
+});
+
+describe('callback branch (b) after a revoke', () => {
+  it('clears the stale purge date, so the reinstalled account is not refused as pending purge', async () => {
+    await install();
+    const [first] = await accounts();
+    const accountId = first?.id ?? '';
+    const connection = await connectionOf(accountId);
+    expect(
+      await revokeConnection(rig.deps, { accountId, connectionId: connection.id, tokenVersion: connection.token_version, reason: 'refresh_revoked' }),
+    ).toBe('revoked');
+    const [revoked] = await accounts();
+    expect(revoked?.processing_state).toBe('revoked');
+    expect(revoked?.purge_after).not.toBeNull();
+
+    rig.clock.advance({ days: 2 });
+    const { res } = await install(new CookieJar());
+    expect(locationOf(res)).toBe(url('/onboarding/email'));
+    const [after] = await accounts();
+    expect(after).toMatchObject({ id: accountId, processing_state: 'onboarding', purge_after: null, disconnected_at: null });
+    expect((await connectionOf(accountId)).status).toBe('active');
+
+    // Action tokens (M3's onboarding buttons) are accepted again: verify refuses them while purge_after is set.
+    const minted = await mintActionTokens(getDb(), { accountId, notificationKey: `inbox-test:${accountId}`, purposes: ['send'], now: rig.clock.now() });
+    const verified = await verifyActionToken(getDb(), minted.send ?? '', 'send', rig.clock.now());
+    expect(verified.ok).toBe(true);
   });
 });
 
@@ -302,7 +356,7 @@ describe('callback branch (d): an owned portal without the owner’s session', (
     expect(alertsSent).toHaveLength(1);
     expect(alertsSent[0]?.to).toEqual(['real.owner@example.com']);
     expect(alertsSent[0]?.text).toContain(
-      'Someone in your HubSpot account tried to connect Autopilot. Nothing changed. If this was you, sign in and tap Reconnect.',
+      `Someone in your HubSpot account tried to connect ${rig.deps.env.PRODUCT_NAME}. Nothing changed. If this was you, sign in and tap Reconnect.`,
     );
     expect(alertsSent[0]?.idempotencyKey).toBe(`${rig.deps.env.ENV_NAMESPACE}:alert:${accountId}:reconnect_attempt:2026-10-06`);
     expect(await connectionOf(accountId)).toEqual(before);
@@ -365,6 +419,16 @@ describe('callback failures', () => {
     expect(await getDb().query(`select 1 from hubspot_connections`)).toHaveLength(0);
   });
 
+  it('extra granted scopes are alerted and not stored; the install still completes read-only (law 2)', async () => {
+    rig.fakes.hubspot.setGrantedScopes([...REQUIRED_SCOPES, 'crm.objects.contacts.write']);
+    const { res } = await install();
+    expect(locationOf(res)).toBe(url('/onboarding/email'));
+    const [account] = await accounts();
+    expect((await connectionOf(account?.id ?? '')).scopes).toEqual([...REQUIRED_SCOPES]);
+    expect(alerts.map((alert) => alert.code)).toEqual(['hubspot_install_extra_scopes']);
+    expect(alerts[0]?.fields).toMatchObject({ count: 1, portalId: PORTAL });
+  });
+
   it('a cancelled consent fails as denied', async () => {
     const jar = new CookieJar();
     const { state } = await beginInstall(jar);
@@ -382,10 +446,40 @@ describe('callback failures', () => {
     await expectNothingCreated();
   });
 
-  it('an OAuth client misconfiguration fails as config and alerts the admin', async () => {
+  it('an OAuth client misconfiguration fails as config and alerts the admin with the underlying code', async () => {
     rig.fakes.hubspot.setRefreshMode('config');
     const { res } = await install();
     expect(locationOf(res)).toBe(url('/install/failed?reason=config'));
     expect(alerts.map((alert) => alert.code)).toEqual(['hubspot_install_oauth_config']);
+    expect(alerts[0]?.fields).toMatchObject({ errorCode: 'hubspot_oauth_config' });
+  });
+
+  it('spends the state once: a replayed cookie and state never reach HubSpot’s token endpoint again', async () => {
+    const jar = new CookieJar();
+    const { state } = await beginInstall(jar);
+    const cookie = jar.header() ?? '';
+    const exchange = vi.spyOn(rig.fakes.hubspot, 'exchangeCode');
+    const replay = (code: string) =>
+      handleHubSpotCallback(new Request(url(`/api/hubspot/oauth/callback?code=${code}&state=${state}`), { headers: { cookie } }), rig.deps);
+    expect(locationOf(await replay('junk-code-1'))).toBe(url('/install/failed?reason=bad_code'));
+    for (const code of ['junk-code-2', 'junk-code-3']) expect(locationOf(await replay(code))).toBe(url('/install/failed?reason=state'));
+    expect(exchange).toHaveBeenCalledTimes(1);
+    // The marker holds only an HMAC of the nonce.
+    const rows = await getDb().query<{ key_hash: string }>(`select key_hash from rate_limits`);
+    expect(rows.some((row) => row.key_hash.includes(state))).toBe(false);
+  });
+
+  it('allows 20 callbacks a minute per IP, then answers 429 with Retry-After without exchanging anything', async () => {
+    rig.clock.set(new Date('2026-10-06T14:00:15.000Z'));
+    const exchange = vi.spyOn(rig.fakes.hubspot, 'exchangeCode');
+    const hit = (ip: string) =>
+      handleHubSpotCallback(new Request(url('/api/hubspot/oauth/callback?code=x&state=y'), { headers: { 'x-real-ip': ip } }), rig.deps);
+    for (let i = 0; i < 20; i += 1) expect(locationOf(await hit('203.0.113.9'))).toBe(url('/install/failed?reason=state'));
+    const limited = await hit('203.0.113.9');
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('retry-after')).toBe('45');
+    expect(limited.headers.get('cache-control')).toBe('no-store');
+    expect(locationOf(await hit('198.51.100.9'))).toBe(url('/install/failed?reason=state'));
+    expect(exchange).not.toHaveBeenCalled();
   });
 });

@@ -112,6 +112,26 @@ describe('GET|POST /api/cron/poll', () => {
     expect(await runCron(rig)).toMatchObject({ skippedRefreshBackoff: 0, polled: 1 });
   });
 
+  it('holds a portal HubSpot answers with its daily limit until its next local midnight, without calling HubSpot (D-11)', async () => {
+    // The account is in America/New_York: the run is on Tuesday 2026-10-06 at 10:01 local time.
+    rig.hubspot.injectFailure('listSubmissions', { kind: 'daily_limit' });
+    expect(await runCron(rig)).toMatchObject({ pollable: 1, polled: 0, skippedDailyLimit: 1, pollErrors: 0 });
+    const held = await getDb().one<{ daily_limit_until: Date }>(`select daily_limit_until from hubspot_connections where id = $1`, [rig.connectionId]);
+    // Local midnight (04:00 UTC in EDT) plus the 10-minute margin.
+    expect(held.daily_limit_until).toEqual(new Date('2026-10-07T04:10:00.000Z'));
+
+    const list = vi.spyOn(rig.hubspot, 'listSubmissions');
+    rig.clock.set(new Date('2026-10-07T04:05:00.000Z'));
+    vi.setSystemTime(rig.clock.now());
+    expect(await runCron(rig)).toMatchObject({ pollable: 1, polled: 0, skippedDailyLimit: 1 });
+    expect(list).not.toHaveBeenCalled();
+
+    rig.clock.set(new Date('2026-10-07T04:10:00.000Z'));
+    vi.setSystemTime(rig.clock.now());
+    expect(await runCron(rig)).toMatchObject({ polled: 1, skippedDailyLimit: 0, pollErrors: 0 });
+    expect(list).toHaveBeenCalled();
+  });
+
   it('does nothing while another run holds the global lease', async () => {
     await acquireLease(getDb(), { name: LeaseNames.pollCron, ttlMs: 6 * 60_000, now: rig.clock.now() });
     expect(await runCron(rig)).toMatchObject({ ok: true, status: 'busy', polled: 0 });

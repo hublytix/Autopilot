@@ -23,6 +23,15 @@ export function missingRequiredScopes(granted: readonly string[]): RequiredScope
   return REQUIRED_SCOPES.filter((scope) => !have.has(scope));
 }
 
+/**
+ * Granted scopes beyond REQUIRED_SCOPES (law 2: no write scopes in v1). The app requests exactly
+ * the required set, so any extra means the app's configuration or HubSpot's grant changed.
+ */
+export function extraScopes(granted: readonly string[]): string[] {
+  const required = new Set<string>(REQUIRED_SCOPES);
+  return [...new Set(granted)].filter((scope) => !required.has(scope));
+}
+
 /** Whether a granted scope list allows reading logged email metadata. */
 export function canReadEmails(granted: readonly string[]): boolean {
   return granted.includes(EMAIL_READ_SCOPE);

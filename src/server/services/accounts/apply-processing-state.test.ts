@@ -5,7 +5,9 @@ import { createJobRegistry } from '@/server/jobs/registry';
 import { createJobTestRig, seedAccount, seedConnection, seedLead, seedSettings, type JobTestRig } from '@/server/jobs/testing';
 import { mintActionTokens } from '@/server/security/action-tokens';
 import { useTestDb as setUpTestDb } from '../../../../test/db/harness';
-import { applyProcessingState, PURGE_AFTER_MS } from './apply-processing-state';
+import { interceptBefore } from '../../../../test/db/intercept';
+import { applyProcessingState, applyProcessingStateInTx, PURGE_AFTER_MS } from './apply-processing-state';
+import { runPostCommitWork } from './post-commit';
 import { seedOwner, seedSelectedForm, seedSubscription, setSubscriptionStatus } from './testing';
 
 const getDb = setUpTestDb();
@@ -272,3 +274,59 @@ describe('applyProcessingState', () => {
     expect(await db.query(`select 1 from notifications_sent`)).toHaveLength(0);
   });
 });
+
+// Sequential replays of the compare-and-set (PLAN §6.1, §12): another caller wins the transition
+// between this one's read and its update. Only the winner may run the side effects.
+describe('applyProcessingState compare-and-set', () => {
+  const CAS = /update accounts set processing_state = \$2/;
+
+  async function applyLosingTo(accountId: string, winnerState: string) {
+    const now = rig.clock.now();
+    const raced = interceptBefore(getDb(), CAS, async (handle) => {
+      await handle.query(`update accounts set processing_state = $2, processing_state_changed_at = $3 where id = $1`, [accountId, winnerState, now]);
+    });
+    const result = await raced.db.tx((tx) => applyProcessingStateInTx(tx, now, accountId));
+    expect(raced.fired()).toBe(1);
+    if (result !== null) await runPostCommitWork(rig.deps, result.work);
+    return result;
+  }
+
+  it('a loser of → inactive reserves no billing-inactive email', async () => {
+    const { accountId } = await activeAccount();
+    rig.clock.advance({ days: 14, minutes: 5 });
+    const result = await applyLosingTo(accountId, 'inactive');
+    expect(result).toMatchObject({ previous: 'active', next: 'inactive', transitioned: false });
+    expect(await getDb().query(`select id from notifications_sent`)).toEqual([]);
+    expect(billingEmails()).toHaveLength(0);
+  });
+
+  it('a loser of → revoked cancels no job, revokes no token and sets no purge date', async () => {
+    const db = getDb();
+    const { accountId, connectionId } = await activeAccount();
+    const now = rig.clock.now();
+    const job = await insertJob(db, { kind: 'portal_poll', accountId, dedupeKey: `poll:${accountId}:9:a`, runAt: now, now });
+    await publishJobs(rig.deps, [job]);
+    const leadId = await seedLead(db, { accountId, now });
+    await mintActionTokens(db, { accountId, leadId, notificationKey: `notify:${leadId}:initial:r0`, purposes: ['send'], now });
+    await db.query(`update hubspot_connections set status = 'revoked', status_changed_at = $2, access_token_enc = null, refresh_token_enc = null where id = $1`, [
+      connectionId,
+      now,
+    ]);
+
+    const result = await applyLosingTo(accountId, 'revoked');
+    expect(result).toMatchObject({ previous: 'active', next: 'revoked', transitioned: false });
+    expect((await db.one<{ status: string }>(`select status from scheduled_jobs where id = $1`, [job?.id])).status).toBe('scheduled');
+    expect(rig.fakes.scheduler.cancelled).toEqual([]);
+    expect(await db.query(`select id from action_tokens where revoked_at is not null`)).toEqual([]);
+    expect((await accountRow(accountId)).purge_after).toBeNull();
+  });
+
+  it('a second call after another one already transitioned finds nothing to do', async () => {
+    const { accountId } = await activeAccount();
+    rig.clock.advance({ days: 14, minutes: 5 });
+    expect(await applyProcessingState(rig.deps, accountId)).toMatchObject({ transitioned: true, next: 'inactive' });
+    expect(await applyProcessingState(rig.deps, accountId)).toMatchObject({ previous: 'inactive', next: 'inactive', transitioned: false });
+    expect(billingEmails()).toHaveLength(1);
+  });
+});
+

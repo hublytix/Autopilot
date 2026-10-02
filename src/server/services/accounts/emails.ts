@@ -3,7 +3,7 @@ import { DateTime } from 'luxon';
 import { createElement } from 'react';
 import { BillingInactive, billingInactiveSubject } from '@/emails/BillingInactive';
 import { OwnerAlert } from '@/emails/OwnerAlert';
-import { RECONNECT_HUBSPOT_SUBJECT, ReconnectHubSpot } from '@/emails/ReconnectHubSpot';
+import { ReconnectHubSpot, reconnectHubSpotSubject } from '@/emails/ReconnectHubSpot';
 import type { NotificationKind } from '@/server/domain/types';
 import type { Db } from '@/server/db';
 import { renderEmail } from '@/server/email/render';
@@ -84,7 +84,7 @@ export async function reconnectPlan(deps: Deps, connectionId: string, statusChan
           purgeDate: owner.purgeAfter === null ? null : formatAccountDate(owner.purgeAfter, owner.timezone),
         }),
       );
-      return { to: [owner.email], subject: RECONNECT_HUBSPOT_SUBJECT, html, text };
+      return { to: [owner.email], subject: reconnectHubSpotSubject(productName), html, text };
     },
     onSent: async (tx) => {
       await tx.query(`update hubspot_connections set reconnect_email_sent_at = $2 where id = $1`, [connectionId, deps.clock.now()]);
@@ -137,8 +137,8 @@ const OWNER_ALERTS = {
   reconnect_attempt: {
     subject: (productName) => `Someone tried to connect ${productName} to your HubSpot account`,
     heading: 'Someone tried to connect HubSpot',
-    paragraphs: () => [
-      'Someone in your HubSpot account tried to connect Autopilot. Nothing changed. If this was you, sign in and tap Reconnect.',
+    paragraphs: (productName) => [
+      `Someone in your HubSpot account tried to connect ${productName}. Nothing changed. If this was you, sign in and tap Reconnect.`,
     ],
     action: { label: 'Sign in', path: LOGIN_PATH },
   },

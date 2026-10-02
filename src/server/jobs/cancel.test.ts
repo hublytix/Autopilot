@@ -97,6 +97,25 @@ describe('cancelJobs', () => {
     expect((await cancelJobs(deps, { accountId, reason: 'revoked' })).jobIds).toHaveLength(1);
   });
 
+  it('never cancels a privacy deletion in an account-wide cancel, unless asked explicitly (D-06)', async () => {
+    const { deps } = rig;
+    const { accountId } = await seedActiveAccount(getDb(), deps.clock.now());
+    const leadId = await seedLead(getDb(), { accountId, now: deps.clock.now() });
+    const fu1 = await followUp(deps, accountId, leadId, 1);
+    const now = deps.clock.now();
+    const privacy = await deps.db.tx((tx) =>
+      insertJob(tx, { kind: 'privacy_delete', accountId, dedupeKey: 'privacy:123:456:1', payload: { contactId: '456' }, runAt: now, now }),
+    );
+    await claimJob(deps.db, privacy?.id ?? '', 'attempt-p', now);
+
+    const revoked = await cancelJobs(deps, { accountId, reason: 'revoked' });
+    expect(revoked.jobIds).toEqual([fu1.id]);
+    expect(await getJob(deps.db, privacy?.id ?? '')).toMatchObject({ status: 'running', attemptId: 'attempt-p' });
+
+    const explicit = await cancelJobs(deps, { accountId, exceptKinds: [], reason: 'account_purge' });
+    expect(explicit.jobIds).toEqual([privacy?.id]);
+  });
+
   it('refuses a cancel without a lead or account (never a bulk cancel)', async () => {
     const { deps } = rig;
     await expect(cancelJobs(deps, { reason: 'dismissed' })).rejects.toBeInstanceOf(CancelFilterRequiredError);

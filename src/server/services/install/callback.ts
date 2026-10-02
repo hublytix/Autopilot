@@ -4,28 +4,32 @@ import { z } from 'zod';
 import { errorCode, isAppError, isConfigError } from '@/server/domain/errors';
 import type { Db } from '@/server/db';
 import { isDbError } from '@/server/db';
-import { missingRequiredScopes } from '@/server/hubspot/scopes';
+import { extraScopes, missingRequiredScopes, REQUIRED_SCOPES } from '@/server/hubspot/scopes';
 import { raiseAlert } from '@/server/jobs/alert';
 import { log } from '@/server/obs/log';
 import type { AccountDetails, ActiveTokenInfo, AuthUser, Deps, SessionCookie, TokenSet } from '@/server/ports';
+import { claimOnce, hitFixedWindow, rateLimitKeyHash } from '@/server/security/rate-limit';
 import { applyProcessingStateInTx } from '@/server/services/accounts/apply-processing-state';
 import { accountLocalDate, ownerAlertKey, ownerAlertPlan } from '@/server/services/accounts/emails';
 import { NO_POST_COMMIT_WORK, runPostCommitWork, type PostCommitWork } from '@/server/services/accounts/post-commit';
 import { encryptTokens } from '@/server/services/hubspot/tokens';
 import { reserveAndSend } from '@/server/services/notifications/send';
-import { issuePendingInstallCookie, verifyState } from './cookies';
+import { issuePendingInstallCookie, readState } from './cookies';
 import { sendReconnectMagicLink as defaultSendReconnectMagicLink, type SendReconnectMagicLink } from './reconnect-magic-link';
 import { resolveTimezone, type ResolvedTimezone } from './timezone';
 
-// GET /api/hubspot/oauth/callback (PLAN §7.3, §9.1 step 1, D-12, D-35):
-// verify the state cookie → exchange the code → check the granted scopes → introspect (portal id,
-// hub_domain, installer email) → account details (timezone, UI domain, hosting location; a failure
-// leaves the timezone for the owner) → one of four branches:
+// GET /api/hubspot/oauth/callback (PLAN §7.3, §9.1 step 1, D-12, D-35, D-36):
+// rate limit (20 per minute per client IP) → verify the state cookie and spend its nonce (single
+// use) → exchange the code → check the granted scopes (a missing one fails the install; an extra
+// one is alerted and not stored, law 2) → introspect (portal id, hub_domain, installer email) →
+// account details (timezone, UI domain, hosting location; a failure leaves the timezone for the
+// owner) → one of four branches:
 //   (a) new portal: account (trial from portal_history, else now + 14 d; portal_history written),
 //       active connection, default settings, a pending_install cookie → /onboarding/email;
 //   (b) existing, never bound: fresh tokens, connection active, last_install_at = now (the orphan
-//       clock restarts), pending owner email reset (pending_owner_auth_user_id kept), trial kept,
-//       a new pending_install cookie → /onboarding/email;
+//       clock restarts), pending owner email reset (pending_owner_auth_user_id kept), purge_after and
+//       disconnected_at cleared as in (c) (an earlier revoke set them; the → onboarding transition
+//       has no side effects), trial kept, a new pending_install cookie → /onboarding/email;
 //   (c) existing, owned, with the owner's verified session: reactivate (connection active; purge
 //       and status fields cleared) and applyProcessingState → /dashboard?reconnected=1;
 //   (d) existing, owned, without that session: nothing changes. The owner as installer → "sign in
@@ -35,6 +39,12 @@ import { resolveTimezone, type ResolvedTimezone } from './timezone';
 // email are never logged.
 
 export const TRIAL_MS = 14 * 24 * 60 * 60 * 1000;
+/**
+ * Callbacks per client IP per minute. Every accepted callback costs a request to HubSpot's token
+ * endpoint with our client credentials, the endpoint every portal's token refresh also uses.
+ */
+export const CALLBACK_RATE_LIMIT = 20;
+export const CALLBACK_RATE_WINDOW_MS = 60 * 1000;
 
 export type InstallFailureReason =
   /** The state cookie is missing, expired, forged, or carries another nonce. */
@@ -55,6 +65,7 @@ export type InstallOutcome =
   | { readonly type: 'reconnected'; readonly accountId: string }
   | { readonly type: 'sign_in_to_reconnect'; readonly accountId: string }
   | { readonly type: 'connected_elsewhere'; readonly accountId: string }
+  | { readonly type: 'rate_limited'; readonly retryAfterSeconds: number }
   | { readonly type: 'failed'; readonly reason: InstallFailureReason };
 
 export interface CallbackInput {
@@ -65,6 +76,8 @@ export interface CallbackInput {
   readonly error: string | null;
   /** The `ap_hs_state` cookie value. */
   readonly stateCookie: string | undefined;
+  /** The client IP for the rate limit (only its HMAC is stored). */
+  readonly ip: string;
   /** The verified session's user, read only when the portal already has an owner. */
   readonly sessionUser: () => Promise<AuthUser | null>;
 }
@@ -91,7 +104,7 @@ function failed(reason: InstallFailureReason): InstallOutcome {
 function oauthFailure(error: unknown, step: 'exchange' | 'introspect'): InstallFailureReason {
   log.warn('hubspot install step failed', { event: 'hubspot.install_failed', reason: step, code: errorCode(error) }, error);
   if (isConfigError(error)) {
-    raiseAlert('hubspot_install_oauth_config', { code: error.code });
+    raiseAlert('hubspot_install_oauth_config', { errorCode: error.code });
     return 'config';
   }
   if (step === 'exchange' && isAppError(error) && error.code === 'hubspot_bad_auth_code') return 'bad_code';
@@ -99,7 +112,21 @@ function oauthFailure(error: unknown, step: 'exchange' | 'introspect'): InstallF
 }
 
 export async function completeInstall(deps: Deps, input: CallbackInput, options: CallbackOptions = {}): Promise<InstallOutcome> {
-  if (!verifyState(deps.env, input.stateCookie, input.state, deps.clock.now())) return failed('state');
+  const now = deps.clock.now();
+  const hit = await hitFixedWindow(deps.db, {
+    keyHash: rateLimitKeyHash(deps.env, `install:callback:ip:${input.ip}`),
+    windowMs: CALLBACK_RATE_WINDOW_MS,
+    now,
+  });
+  if (hit.count > CALLBACK_RATE_LIMIT) {
+    log.warn('hubspot install callback rate limited', { event: 'hubspot.install_rate_limited', count: hit.count });
+    return { type: 'rate_limited', retryAfterSeconds: Math.max(1, Math.ceil((hit.windowEnd.getTime() - now.getTime()) / 1000)) };
+  }
+  const state = readState(deps.env, input.stateCookie, input.state, now);
+  if (state === null) return failed('state');
+  // Single use: a replayed cookie and state pair cannot reach the token endpoint again.
+  const firstUse = await claimOnce(deps.db, { keyHash: rateLimitKeyHash(deps.env, `install:state:${input.state ?? ''}`), windowStart: state.expiresAt });
+  if (!firstUse) return failed('state');
   if (input.error !== null || input.code === null || input.code.length === 0 || input.code.length > 2048) return failed('denied');
 
   let tokens: TokenSet;
@@ -118,8 +145,17 @@ export async function completeInstall(deps: Deps, input: CallbackInput, options:
   } catch (error) {
     return failed(oauthFailure(error, 'introspect'));
   }
-  const scopes = tokens.scopes ?? info.scopes;
-  if (missingRequiredScopes(scopes).length > 0) return failed('missing_scopes');
+  const granted = tokens.scopes ?? info.scopes;
+  if (missingRequiredScopes(granted).length > 0) return failed('missing_scopes');
+  // Law 2: the app asks for exactly REQUIRED_SCOPES. Anything more (a write scope added to the app's
+  // optional scopes, say) is alerted, and only the required scopes are recorded; the request
+  // allow-list still refuses every write.
+  const extra = extraScopes(granted);
+  if (extra.length > 0) {
+    log.warn('hubspot granted extra scopes', { event: 'hubspot.install_extra_scopes', portalId: info.hubId, count: extra.length });
+    raiseAlert('hubspot_install_extra_scopes', { portalId: info.hubId, count: extra.length });
+  }
+  const scopes: readonly string[] = REQUIRED_SCOPES.filter((scope) => granted.includes(scope));
 
   let details: AccountDetails | null = null;
   try {
@@ -138,7 +174,7 @@ export async function completeInstall(deps: Deps, input: CallbackInput, options:
         event: 'hubspot.install',
         portalId: info.hubId,
         outcome: outcome.type === 'onboarding' ? outcome.branch : outcome.type,
-        accountId: outcome.type === 'failed' ? undefined : outcome.accountId,
+        accountId: outcome.type === 'failed' || outcome.type === 'rate_limited' ? undefined : outcome.accountId,
       });
       return outcome;
     }
@@ -284,7 +320,8 @@ async function createPortal(deps: Deps, installed: Installed): Promise<InstallOu
     throw error;
   }
   await runPostCommitWork(deps, work);
-  const cookie = issuePendingInstallCookie(deps.env, { accountId, installerEmail: installed.info.userEmail }, now);
+  // `now` is the last_install_at this install wrote: only the newest cookie matches it (M3).
+  const cookie = issuePendingInstallCookie(deps.env, { accountId, installerEmail: installed.info.userEmail, installedAt: now }, now);
   return { type: 'onboarding', branch: 'new_portal', accountId, cookies: [cookie] };
 }
 
@@ -294,7 +331,8 @@ async function reinstallUnbound(deps: Deps, existing: ExistingAccount, installed
   const accountId = existing.id;
   const result = await deps.db.tx(async (tx): Promise<PostCommitWork | 'retry'> => {
     const still = await tx.maybeOne(
-      `update accounts set last_install_at = $2, pending_owner_email = null, pending_owner_expires_at = null
+      `update accounts set last_install_at = $2, pending_owner_email = null, pending_owner_expires_at = null,
+                          purge_after = null, disconnected_at = null
         where id = $1 and owner_user_id is null returning id`,
       [accountId, now],
     );
@@ -307,7 +345,8 @@ async function reinstallUnbound(deps: Deps, existing: ExistingAccount, installed
   });
   if (result === 'retry') return 'retry';
   await runPostCommitWork(deps, result);
-  const cookie = issuePendingInstallCookie(deps.env, { accountId, installerEmail: installed.info.userEmail }, now);
+  // `now` is the last_install_at this install wrote: only the newest cookie matches it (M3).
+  const cookie = issuePendingInstallCookie(deps.env, { accountId, installerEmail: installed.info.userEmail, installedAt: now }, now);
   return { type: 'onboarding', branch: 'unbound', accountId, cookies: [cookie] };
 }
 
