@@ -21,7 +21,8 @@ type Params = Promise<{ token: string }>;
 
 export default async function VerifyNotifyPage({ params }: { params: Params }) {
   const { token } = await params;
-  const state = await verifyNotifyPageState(await getDeps(), token, await headers());
+  const requestHeaders = await headers();
+  const state = await verifyNotifyPageState(await getDeps(), token, requestHeaders);
 
   switch (state.type) {
     case 'confirm':

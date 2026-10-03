@@ -30,6 +30,13 @@ function formatDuration(seconds: number): string {
   return hours % 24 === 0 ? `${days} d` : `${days} d ${hours % 24} h`;
 }
 
+/**
+ * Law 5 / D-49: the baseline sends each submission's message, first name, company and form name to
+ * the AI provider to sort out the leads (services/baseline/job.ts, in memory); /privacy says the same.
+ */
+const BASELINE_CARD_NOTE =
+  'From HubSpot data only. AI sorts these submissions in memory to find the leads; we keep only the counts and times below, nothing about the leads themselves.';
+
 const REQUIREMENTS = {
   brief: { done: 'Your business brief is saved.', todo: 'Finish your brief first', href: '/onboarding/brief' },
   forms: { done: 'At least one form is selected.', todo: 'Choose at least one form', href: '/onboarding/forms' },
@@ -111,8 +118,9 @@ function BaselineStatus({ view }: { view: BaselinePageView }) {
 }
 
 export default async function OnboardingBaselinePage({ searchParams }: { searchParams: SearchParams }) {
+  const requestHeaders = await headers();
   const deps = await getDeps();
-  const scope = await requireOwnerPage(deps, await headers());
+  const scope = await requireOwnerPage(deps, requestHeaders);
   const params = await searchParams;
   const view = await baselinePageView(scope, deps);
   const { gate } = view;
@@ -134,7 +142,7 @@ export default async function OnboardingBaselinePage({ searchParams }: { searchP
 
   return (
     <Page title="Almost done" description="Here's how you've been answering leads, so your Monday reports can show what changes.">
-      <Card title="Your last 30 days" description="From HubSpot data only. Nothing about these leads is stored.">
+      <Card title="Your last 30 days" description={BASELINE_CARD_NOTE}>
         <BaselineStatus view={view} />
       </Card>
 

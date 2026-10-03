@@ -1,11 +1,11 @@
 # Hublytix Autopilot v1: build plan
 
-Status: **PLAN, revision 5 (after four plan-review rounds). Approved by the owner on 2026-10-02; EXECUTE in progress.**
+Status: **PLAN, revision 5 (after four plan-review rounds). Approved by the owner on 2026-10-02; EXECUTE done (M1–M8); the REVIEW verdicts are DECISIONS D-87.** The plan text below is the approved text; where the build differs, DECISIONS records it.
 
 Inputs:
 - `docs/BUILD_BRIEF.md`: the specification.
 - `docs/RESEARCH.md`: the verified facts. DECISIONS cites them by finding ID in [brackets]; full evidence is in `docs/research/*.md`.
-- `docs/DECISIONS.md`: D-01…D-53, every deviation from the brief and every choice where the brief is silent.
+- `docs/DECISIONS.md`: D-01 onwards, every deviation from the brief and every choice where the brief is silent.
 
 ---
 

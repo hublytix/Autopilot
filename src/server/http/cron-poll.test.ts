@@ -144,8 +144,10 @@ describe('GET|POST /api/cron/poll', () => {
 
 describe('/api/cron/poll route file', () => {
   it('matches the vercel.json schedule and serves both triggers (GET from Vercel Cron, POST from QStash)', async () => {
-    const config = JSON.parse(readFileSync(path.join(process.cwd(), 'vercel.json'), 'utf8')) as { crons: { path: string; schedule: string }[] };
-    expect(config.crons).toContainEqual({ path: CRON_POLL_PATH, schedule: '*/5 * * * *' });
+    // No `crons` key: the QStash-schedules path (D-16, WIRE_UP 4.4), checked by scripts/qstash-schedules.test.ts.
+    const config = JSON.parse(readFileSync(path.join(process.cwd(), 'vercel.json'), 'utf8')) as { crons?: { path: string; schedule: string }[] };
+    const declared = config.crons ?? [{ path: CRON_POLL_PATH, schedule: '*/5 * * * *' }];
+    expect(declared).toContainEqual({ path: CRON_POLL_PATH, schedule: '*/5 * * * *' });
     const route = await import('@/app/api/cron/poll/route');
     expect(typeof route.GET).toBe('function');
     expect(typeof route.POST).toBe('function');

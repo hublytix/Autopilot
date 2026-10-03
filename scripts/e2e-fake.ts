@@ -12,6 +12,11 @@
 //   M7: /dashboard/settings (preferences saved without JavaScript, the forms page) → /dashboard/billing
 //   → Subscribe → the fake Razorpay checkout → "Authorise payment" → authenticated → Cancel →
 //   Disconnect → /admin for an ADMIN_EMAILS address (a 404 for the owner).
+// M8: first the public pages (the landing page and the four legal pages, each "TODO: legal review",
+// never noindex); after the onboarding the /dev panel (fake mode): a lead submitted as a new contact
+// (HubSpot's signed webhook to the real handler) → "Run due jobs now" → the drafted lead on the
+// dashboard and its new_lead email in the panel's outbox and on /dev/email/{id}; cross-origin and
+// GET refused; at the very end "Reset fake state" empties everything and signs the caller out.
 //
 // The app's PGlite is single-process, so the magic link is read with the server stopped and the
 // server is started again on the same FAKE_DB_DIR: the link still works after the restart only
@@ -22,6 +27,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { load, type CheerioAPI } from 'cheerio';
+import { HUBSPOT_DISCLOSURE, LEGAL_LINKS, LEGAL_TODO, PRICE_LINE, SUB_PROCESSORS } from '@/components/marketing/legal';
 import { createPgliteDb } from '@/server/db/pglite';
 import { CookieJar } from '@/server/security/cookies';
 import { freePort, get, HOST, startServer, stopServer, waitUntilReady, type NextServer } from './next-server';
@@ -185,6 +191,7 @@ async function run(dataDir: string): Promise<void> {
   let server: NextServer = startServer(port, env);
   try {
     await waitUntilReady(baseUrl, server);
+    await runPublicPages(new Browser(baseUrl, '198.51.100.5'));
     const installer = new Browser(baseUrl, '198.51.100.7');
 
     // 1. Install → fake consent → callback (branch a).
@@ -441,8 +448,14 @@ async function run(dataDir: string): Promise<void> {
     const baselineDone = await waitFor(owner, 'the baseline job', (s) => (s.baseline as { state?: string } | undefined)?.state === 'done');
     check('baseline job done (dev ticker)', (baselineDone?.baseline as { state?: string } | undefined)?.state === 'done', JSON.stringify(baselineDone?.baseline ?? null));
 
+    // M8: the /dev panel plays a lead submitting the form; the pipeline drafts it.
+    await runDevPanel(owner, baseUrl);
+
     // M7: settings, billing through the fake Razorpay checkout, Disconnect, /admin.
     server = await runM7(owner, anonymous, baseUrl, dataDir, port, env, server);
+
+    // M8: "Reset fake state" last (it empties the database and signs the caller out).
+    await runDevReset(owner, baseUrl);
   } catch (error) {
     check('run', false, error instanceof Error ? `${error.name}: ${error.message}` : 'failed');
     console.error(server.output.join('').slice(-4000));
@@ -456,6 +469,152 @@ async function run(dataDir: string): Promise<void> {
     .filter((line) => line.includes('"level":"error"') || line.includes('"level":"warn"'));
   for (const line of flagged) console.log(`e2e: server ${line}`);
   check('server logged no error', !flagged.some((line) => line.includes('"level":"error"')), `${flagged.length} warn/error lines`);
+}
+
+/** No noindex (public pages are meant to be found); the root layout's per-request CSP nonce makes every page `no-store`. */
+function isIndexable(response: Response): boolean {
+  return !(response.headers.get('x-robots-tag') ?? '').includes('noindex');
+}
+
+/**
+ * M8 (PLAN §7.2, brief §5.13): the landing page (the one-liner, the price, the Install link, who can
+ * install, the footer's legal links) and the four legal pages, each a placeholder marked "TODO: legal
+ * review"; /privacy names every sub-processor with its policy link and states the HubSpot disclosure.
+ */
+async function runPublicPages(visitor: Browser): Promise<void> {
+  const landing = await visitor.page('/');
+  const landingText = landing.$('main').text();
+  const footer = landing.$('footer a').toArray().map((a) => landing.$(a).attr('href'));
+  const nonce = scriptsNonced(landing.response, landing.$);
+  check(
+    'GET /: the one-liner, the price, Install with HubSpot, who can install, the legal links',
+    landing.response.status === 200 &&
+      isIndexable(landing.response) &&
+      nonce.ok &&
+      landingText.includes('answers and follows up every new lead automatically for HubSpot Starter users') &&
+      landingText.includes(PRICE_LINE) &&
+      landingText.includes('Installing needs a Super Admin or App Marketplace Access permission in HubSpot.') &&
+      landingText.includes('It never sends email for you') &&
+      landing.$('a[href="/api/hubspot/install"]:contains("Install with HubSpot")').length === 1 &&
+      LEGAL_LINKS.every((link) => footer.includes(link.href)) &&
+      footer.includes('/login'),
+    `${landing.response.status}, indexable ${isIndexable(landing.response)}, ${nonce.detail}, footer ${footer.join(' ')}`,
+  );
+  for (const link of LEGAL_LINKS) {
+    const page = await visitor.page(link.href);
+    const text = page.$('main').text();
+    check(
+      `GET ${link.href}: public, "${LEGAL_TODO}"`,
+      page.response.status === 200 && isIndexable(page.response) && text.includes(LEGAL_TODO) && page.$('footer a[href="/"]').length === 1,
+      `${page.response.status}, indexable ${isIndexable(page.response)}`,
+    );
+    if (link.href !== '/privacy') continue;
+    const policies = page.$('a[href^="https://"]').toArray().map((a) => page.$(a).attr('href'));
+    const named = SUB_PROCESSORS.filter((processor) => text.includes(processor.name) && policies.includes(processor.policyUrl));
+    check(
+      '/privacy: every sub-processor named with its policy link, and the HubSpot disclosure',
+      named.length === SUB_PROCESSORS.length && SUB_PROCESSORS.length === 7 && text.includes(HUBSPOT_DISCLOSURE),
+      `${named.length}/${SUB_PROCESSORS.length} sub-processors linked`,
+    );
+  }
+  const devDuringInstall = await visitor.page('/dev');
+  check('/dev in fake mode: 200, private', devDuringInstall.response.status === 200 && isPrivate(devDuringInstall.response), `${devDuringInstall.response.status}, private ${isPrivate(devDuringInstall.response)}`);
+}
+
+/**
+ * M8 (PLAN §4, §7.6): the /dev panel. A lead submits the "Contact us" form as a new contact (HubSpot's
+ * signed object.creation webhook reaches the real handler), "Run due jobs now" runs the poll and
+ * lead_process, and the owner sees the drafted lead on the dashboard and its new_lead email in the
+ * panel's outbox (/dev/email/{id}: the HTML in a sandboxed iframe without scripts). The action route
+ * refuses another origin (403) and GET (405).
+ */
+async function runDevPanel(owner: Browser, baseUrl: string): Promise<void> {
+  const panel = await owner.page('/dev');
+  const nonce = scriptsNonced(panel.response, panel.$);
+  check(
+    'GET /dev: the clock, the fake portal, the accounts and the outbox (magic link, inbox test)',
+    panel.response.status === 200 &&
+      isPrivate(panel.response) &&
+      nonce.ok &&
+      panel.$('[data-testid="dev-now"]').length === 1 &&
+      panel.$('#outbox a[href^="/dev/email/"]').length >= 2 &&
+      panel.$('select[name="form"] option').length >= 2,
+    `${panel.response.status}, private ${isPrivate(panel.response)}, ${nonce.detail}, outbox ${panel.$('#outbox a[href^="/dev/email/"]').length}`,
+  );
+  const contactUs = panel.$('select[name="form"] option:contains("Contact us")').attr('value') ?? '';
+  const lead = { form: contactUs, contact: 'new', email: 'maya@okafor-bakery.example', firstName: 'Maya', lastName: 'Okafor', company: 'Okafor Bakery', message: 'Our kitchen sink leaks under the cabinet. Could someone come this week?' };
+  const submitted = await owner.submit(panel.$, '/dev', 'input[name="email"]#dev-email', lead);
+  await submitted.body?.cancel();
+  check(
+    '/dev: submit a lead as a new contact → HubSpot\'s signed webhook accepted',
+    submitted.status === 303 && locationPath(submitted, baseUrl) === '/dev?done=submit_lead&webhook=1',
+    `${submitted.status} → ${locationPath(submitted, baseUrl) ?? 'none'}`,
+  );
+  const ranPanel = await owner.page('/dev');
+  const ran = await owner.submit(ranPanel.$, '/dev', 'button:contains("Run due jobs now")');
+  await ran.body?.cancel();
+  check('/dev: run due jobs now', ran.status === 303 && (locationPath(ran, baseUrl) ?? '').startsWith('/dev?done=run_jobs&count='), `${ran.status} → ${locationPath(ran, baseUrl) ?? 'none'}`);
+  // The dev ticker may be delivering the same jobs; give lead_process a moment if it is mid-run.
+  let listed = 0;
+  let dashboard = await owner.page('/dashboard');
+  for (let attempt = 0; attempt < 15; attempt += 1) {
+    listed = dashboard.$('ul[aria-label="Recent leads"] li').length;
+    if (listed === 1 && dashboard.html.includes('Maya')) break;
+    await sleep(1_000);
+    dashboard = await owner.page('/dashboard');
+  }
+  check('the dashboard lists the submitted lead', listed === 1 && dashboard.html.includes('Maya'), `${listed} listed`);
+  const outbox = await owner.page('/dev');
+  const newLead = outbox.$('#outbox a:contains("New lead: Maya")').first();
+  const emailPath = newLead.attr('href') ?? '';
+  check('/dev outbox: the new_lead email', emailPath.startsWith('/dev/email/'), emailPath === '' ? 'none' : 'found');
+  if (emailPath !== '') {
+    const email = await owner.page(emailPath);
+    const frame = email.$('iframe');
+    const sandbox = frame.attr('sandbox') ?? '';
+    check(
+      '/dev/email/{id}: headers, the HTML in a sandboxed iframe without scripts, the text part',
+      email.response.status === 200 &&
+        isPrivate(email.response) &&
+        frame.length === 1 &&
+        !sandbox.includes('allow-scripts') &&
+        !sandbox.includes('allow-same-origin') &&
+        (frame.attr('srcdoc') ?? '').includes('Send from my email'),
+      `${email.response.status}, sandbox "${sandbox}"`,
+    );
+  }
+  const crossOrigin = await owner.request('/dev/actions', {
+    method: 'POST',
+    headers: { origin: 'https://attacker.example', 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'action=run_jobs',
+  });
+  await crossOrigin.body?.cancel();
+  const getActions = await owner.request('/dev/actions');
+  await getActions.body?.cancel();
+  check('/dev/actions: another origin → 403, GET → 405', crossOrigin.status === 403 && getActions.status === 405, `${crossOrigin.status}, ${getActions.status}`);
+}
+
+/** M8: "Reset fake state" (confirm box ticked) empties the database and signs the caller out; the owner's session is gone too. */
+async function runDevReset(owner: Browser, baseUrl: string): Promise<void> {
+  const dev = new Browser(baseUrl, '198.51.100.50');
+  const panel = await dev.page('/dev');
+  const reset = await dev.submit(panel.$, '/dev', 'button:contains("Reset fake state")', { confirm: 'yes' });
+  await reset.body?.cancel();
+  const after = await dev.page('/dev');
+  check(
+    '/dev: reset fake state → empty outbox, no account',
+    reset.status === 303 && locationPath(reset, baseUrl) === '/dev?done=reset' && after.html.includes('No email yet.'),
+    `${reset.status} → ${locationPath(reset, baseUrl) ?? 'none'}`,
+  );
+  // The owner's cookie is still well-formed, so the proxy lets it through and the page's owner check
+  // (Next's redirect(), 307) sends it to /login: the user it named is gone.
+  const ownerAfter = await owner.request('/dashboard');
+  await ownerAfter.body?.cancel();
+  check(
+    'after the reset the owner is signed out',
+    (ownerAfter.status === 303 || ownerAfter.status === 307) && locationPath(ownerAfter, baseUrl) === '/login',
+    `${ownerAfter.status} → ${locationPath(ownerAfter, baseUrl) ?? 'none'}`,
+  );
 }
 
 /**

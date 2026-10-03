@@ -47,6 +47,21 @@ export const DISCONNECT_BILLING_RESULTS: Readonly<Record<string, ResultCopy | nu
   failed: { tone: 'warning', text: "We couldn't cancel your subscription just now. Cancel it on the billing page." },
 };
 
+/**
+ * `?uninstall=` after a disconnect (own-key lookup): HubSpot's uninstall did not happen, so the owner
+ * removes the app in HubSpot themselves (D-03's "Disconnecting uninstalls the app" kept true, D-86).
+ */
+export const DISCONNECT_UNINSTALL_RESULTS: Readonly<Record<string, ResultCopy>> = {
+  failed: {
+    tone: 'warning',
+    text: "We couldn't uninstall the app from HubSpot for you. Remove it in HubSpot under Settings → Integrations → Connected apps.",
+  },
+  skipped: {
+    tone: 'warning',
+    text: "Autopilot had already lost access to HubSpot, so it couldn't ask HubSpot to uninstall the app. If the app is still listed in HubSpot under Settings → Integrations → Connected apps, remove it there.",
+  },
+};
+
 /** Preferences saved: what else happened (counts and flags only). */
 export function preferencesSavedLines(input: { sent: number; limited: boolean; bcc: boolean; alert: boolean }): string[] {
   const lines: string[] = [];

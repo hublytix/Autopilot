@@ -19,9 +19,9 @@ supabase/.branches/
 *.pem
 *.key
 
-# local data and generated output
+# local data and generated output (the simulation writes ./outbox at the repository root only)
 .data/
-outbox/
+/outbox/
 coverage/
 
 # misc

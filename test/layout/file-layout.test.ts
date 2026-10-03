@@ -71,6 +71,15 @@ describe('file layout', () => {
     'src/app/dev/fake-checkout/[id]/page.tsx',
     'src/app/dev/fake-checkout/[id]/decision/route.ts',
     'src/server/security/razorpay-signature.ts',
+    // M8 (PLAN §7.2, §7.6, brief §5.13): the public legal pages and the /dev panel.
+    'src/app/page.tsx',
+    'src/app/privacy/page.tsx',
+    'src/app/terms/page.tsx',
+    'src/app/refunds/page.tsx',
+    'src/app/shipping/page.tsx',
+    'src/app/dev/page.tsx',
+    'src/app/dev/actions/route.ts',
+    'src/app/dev/email/[id]/page.tsx',
   ])('has %s', (file) => {
     expect(exists(file)).toBe(true);
   });
@@ -97,20 +106,24 @@ describe('file layout', () => {
   });
 
   // PLAN §8.1: the three periodic triggers (UTC), declared for Vercel Pro (scripts/qstash-schedules.ts
-  // mirrors them; its own test compares the two).
-  it('vercel.json declares exactly the PLAN §8.1 cron schedules', () => {
-    const config = JSON.parse(readFileSync(path.join(root, 'vercel.json'), 'utf8')) as { crons?: unknown };
-    expect(config.crons).toEqual([
-      { path: '/api/cron/poll', schedule: '*/5 * * * *' },
-      { path: '/api/cron/weekly-report', schedule: '0 * * * *' },
-      { path: '/api/cron/daily', schedule: '17 3 * * *' },
-    ]);
+  // mirrors them; its own test compares the two). On the QStash-schedules path (Vercel Hobby, D-16,
+  // WIRE_UP 4.4) vercel.json has no `crons` key at all; anything in between is a mistake.
+  const PLAN_CRONS = [
+    { path: '/api/cron/poll', schedule: '*/5 * * * *' },
+    { path: '/api/cron/weekly-report', schedule: '0 * * * *' },
+    { path: '/api/cron/daily', schedule: '17 3 * * *' },
+  ];
+
+  it('vercel.json declares exactly the PLAN §8.1 cron schedules, or none on the QStash-schedules path', () => {
+    const config = JSON.parse(readFileSync(path.join(root, 'vercel.json'), 'utf8')) as Record<string, unknown>;
+    // Absent (QStash schedules) passes; present must be the exact set (an empty or partial list fails).
+    expect('crons' in config ? config.crons : PLAN_CRONS).toEqual(PLAN_CRONS);
   });
 
-  // Vercel Cron calls GET; a QStash schedule POSTs (D-16). Each declared path needs both handlers.
-  it('every vercel.json cron path has a route file with GET and POST', () => {
-    const config = JSON.parse(readFileSync(path.join(root, 'vercel.json'), 'utf8')) as { crons: { path: string }[] };
-    for (const cron of config.crons) {
+  // Vercel Cron calls GET; a QStash schedule POSTs (D-16). Each periodic path needs both handlers,
+  // whichever trigger the deployment uses.
+  it('every PLAN §8.1 cron path has a route file with GET and POST', () => {
+    for (const cron of PLAN_CRONS) {
       const file = path.join(root, 'src/app', cron.path, 'route.ts');
       expect(existsSync(file), cron.path).toBe(true);
       const source = readFileSync(file, 'utf8');

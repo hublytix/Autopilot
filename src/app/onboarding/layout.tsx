@@ -28,7 +28,8 @@ const STEPS: readonly Step[] = [
 ];
 
 export default async function OnboardingLayout({ children }: { children: ReactNode }) {
-  const access = await onboardingAccess(await getDeps(), await headers());
+  const requestHeaders = await headers();
+  const access = await onboardingAccess(await getDeps(), requestHeaders);
   if (access === 'none') {
     return (
       <Page

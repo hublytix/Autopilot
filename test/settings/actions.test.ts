@@ -184,6 +184,25 @@ describe('disconnect from settings', () => {
     );
   });
 
+  it('reports a failed HubSpot uninstall as a code, so the page can say to remove the app by hand', async () => {
+    const rig = getRig();
+    const account = await seedSettingsAccount(rig);
+    rig.fakes.hubspot.injectFailure('uninstallApp', { kind: 'server_error' });
+    expect(await runDisconnect(rig.deps, account.scope, form({}), { sleep: rig.sleep })).toBe(
+      '/dashboard/settings?result=disconnected&billing=not_requested&uninstall=failed',
+    );
+    expect(await connectionState(getDb(), account.accountId)).toMatchObject({ status: 'disconnected' });
+  });
+
+  it('reports an uninstall that could not run (HubSpot had already revoked the connection) as skipped', async () => {
+    const rig = getRig();
+    const account = await seedSettingsAccount(rig);
+    await getDb().query(`update hubspot_connections set status = 'revoked' where account_id = $1`, [account.accountId]);
+    expect(await runDisconnect(rig.deps, account.scope, form({}), { sleep: rig.sleep })).toBe(
+      '/dashboard/settings?result=disconnected&billing=not_requested&uninstall=skipped',
+    );
+  });
+
   it('without the box ticked the subscription is kept', async () => {
     const rig = getRig();
     const account = await seedSettingsAccount(rig);

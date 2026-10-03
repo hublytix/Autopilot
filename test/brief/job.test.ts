@@ -15,6 +15,7 @@ import type { WebFetcher } from '@/server/ports/web-fetcher';
 import { createOwnerScopeForTest, type OwnerScope } from '@/server/services/auth';
 import { briefGenerateFailurePath, createBriefGenerateHandler } from '@/server/services/brief/job';
 import { BRIEF_JOB_BUDGET_MS, BRIEF_JOBS_PER_DAY, MAX_FAQS, MIN_LLM_BUDGET_MS } from '@/server/services/brief/limits';
+import { aiAccountShareMicroUsd, aiDailyBudgetMicroUsd } from '@/server/services/drafting';
 import { getLatestBrief } from '@/server/services/brief/repository';
 import { briefGenerateDedupeKey, requestBriefGeneration } from '@/server/services/brief/request';
 import { EMPTY_BRIEF } from '@/server/services/brief/schema';
@@ -75,6 +76,14 @@ async function deliverNext(): Promise<void> {
   const next = rig.fakes.scheduler.nextRunAt();
   if (next !== null && next.getTime() > rig.clock.now().getTime()) rig.clock.set(next);
   await rig.fakes.scheduler.runDue(rig.clock.now());
+}
+
+/** Records AI spend for `account` today (UTC), as ai_calls rows do. */
+async function spend(account: string, microUsd: number): Promise<void> {
+  await getDb().query(
+    `insert into ai_calls (account_id, purpose, attempt, model, cost_micro_usd, outcome, created_at) values ($1, 'draft', 1, 'claude-sonnet-5-5', $2, 'ok', $3)`,
+    [account, microUsd, rig.clock.now()],
+  );
 }
 
 /** An LLM whose brief is fixed (the model "says" whatever the test needs); the other methods are unused. */
@@ -361,6 +370,39 @@ describe('brief_generate: failures leave the editor empty', () => {
     expect(await briefJob(id)).toMatchObject({ status: 'running', error_code: 'site_http_error' });
     for (let delivery = 1; delivery < 5; delivery += 1) await deliverNext();
     expect(await briefJob(id)).toMatchObject({ status: 'failed', attempts: 5, error_code: 'brief_site_http_error' });
+  });
+
+  it('a tripped AI budget breaker (D-36) fails the brief job at once, before the crawl and without a model call', async () => {
+    // Another account has spent today's whole budget.
+    const other = await seedAccount(getDb(), { now: rig.clock.now() });
+    await spend(other, aiDailyBudgetMicroUsd(rig.deps.env));
+    const fetched: string[] = [];
+    const deps: Deps = { ...rig.deps, webFetcher: { fetch: async (url, options) => (fetched.push(url), rig.fakes.webFetcher.fetch(url, options)) } };
+    const id = await request();
+    await runWith(deps, id);
+    expect(await briefJob(id)).toEqual({ status: 'failed', attempts: 1, error_code: 'ai_budget' });
+    expect((await scheduledJob(id)).status).toBe('done');
+    expect(rig.fakes.llm.callsFor('brief')).toEqual([]);
+    expect(fetched).toEqual([]);
+    expect(await versions()).toEqual([]);
+    expect((await getLatestBrief(scope, rig.deps)).form).toEqual({ brief: EMPTY_BRIEF, origin: 'empty', version: null });
+    expect(alerts.map((alert) => alert.code)).toEqual(['ai_daily_budget_reached']);
+  });
+
+  it("this account's AI share used up fails its brief job the same way; another account's brief still runs", async () => {
+    await spend(accountId, aiAccountShareMicroUsd(rig.deps.env));
+    const id = await request();
+    await deliverNext();
+    expect(await briefJob(id)).toMatchObject({ status: 'failed', error_code: 'ai_budget' });
+    expect(rig.fakes.llm.callsFor('brief')).toEqual([]);
+    expect(alerts.map((alert) => alert.code)).toEqual(['ai_account_share_reached']);
+
+    const otherAccount = await seedAccount(getDb(), { now: rig.clock.now(), processingState: 'onboarding' });
+    const otherScope = createOwnerScopeForTest(otherAccount, randomUUID());
+    const other = await requestBriefGeneration(otherScope, rig.deps, { websiteUrl: FIXTURE_SITE_URL });
+    if (!other.ok) throw new Error(`request refused: ${other.reason}`);
+    await deliverNext();
+    expect(await briefJob(other.briefJobId)).toMatchObject({ status: 'done' });
   });
 
   it('the QStash failure callback runs the same failure path', async () => {

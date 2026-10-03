@@ -413,7 +413,8 @@ describe('callback failures', () => {
   });
 
   it('missing scopes fail the install and store nothing', async () => {
-    rig.fakes.hubspot.setGrantedScopes(REQUIRED_SCOPES.filter((scope) => scope !== 'sales-email-read'));
+    // `forms` is required on both D-03 paths (sales-email-read is not on path b: email-scope-path-b.test.ts).
+    rig.fakes.hubspot.setGrantedScopes(REQUIRED_SCOPES.filter((scope) => scope !== 'forms'));
     const { res } = await install();
     expect(locationOf(res)).toBe(url('/install/failed?reason=missing_scopes'));
     await expectNothingCreated();

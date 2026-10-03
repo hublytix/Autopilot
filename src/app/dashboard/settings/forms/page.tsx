@@ -29,8 +29,9 @@ const TYPE_LABELS: Readonly<Record<string, string>> = { hubspot: 'Form', flow: '
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 export default async function SettingsFormsPage({ searchParams }: { searchParams: SearchParams }) {
+  const requestHeaders = await headers();
   const deps = await getDeps();
-  const scope = await requireOwnerPage(deps, await headers());
+  const scope = await requireOwnerPage(deps, requestHeaders);
   const params = await searchParams;
   const errorCode = typeof params.error === 'string' ? params.error : undefined;
   const error = errorCode === undefined ? undefined : (ownValue(ERRORS, errorCode) ?? ERRORS.invalid);

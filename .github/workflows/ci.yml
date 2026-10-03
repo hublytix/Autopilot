@@ -15,11 +15,12 @@ concurrency:
 
 jobs:
   gates:
-    name: typecheck · lint · test · build · bundle check · smoke · simulate
+    name: typecheck · lint · finding IDs · test · build · bundle check · smoke · e2e · simulate
     runs-on: ubuntu-latest
     # The M7 simulation variants (billing, lapse, disconnect) let two to five weeks of 5-minute ticks
-    # go by on PGlite, in the test suite (under the 2030 system time) and in `npm run simulate`.
-    timeout-minutes: 45
+    # go by on PGlite, in the test suite (under the 2030 system time) and in `npm run simulate`, which
+    # runs every scenario twice (the second time with the process clock at 2030, PLAN §13).
+    timeout-minutes: 60
     env:
       NEXT_TELEMETRY_DISABLED: '1'
     steps:
@@ -40,6 +41,9 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      - name: Finding IDs (PLAN and DECISIONS cite only researched findings)
+        run: npm run check:finding-ids
 
       - name: Test
         run: npm test
@@ -62,7 +66,7 @@ jobs:
         env:
           APP_MODE: fake
 
-      - name: Simulate
+      - name: Simulate (and repeat with the system time at 2030; the two must match)
         run: npm run simulate
         env:
           APP_MODE: fake

@@ -25,6 +25,13 @@ export const RUNNING_TEXT: Readonly<Record<AccountProcessingState, string | null
   disconnected: "HubSpot is disconnected, so Autopilot can't read new leads until you reconnect, whatever your billing.",
 };
 
+/**
+ * Razorpay's API can't cancel a pending, halted or paused subscription (D-48), so neither can this
+ * page; /refunds says the same (brief §4.6's "cancel at any time" narrowed, D-83).
+ */
+export const NOT_CANCELLABLE_LINE =
+  "While a payment has failed or your subscription is paused, it can't be cancelled here: fix the payment or resume the subscription first.";
+
 export interface StatusCopy {
   readonly title: string;
   readonly lines: readonly string[];
@@ -87,15 +94,19 @@ export function subscriptionCopy(subscription: SubscriptionView | null, supportE
             ? "Autopilot has stopped while the payment is outstanding."
             : `Autopilot keeps running until ${subscription.graceUntil}. If the payment still hasn't gone through by then, it stops.`,
           'Razorpay tries the payment again. Update your payment method to fix it now.',
+          NOT_CANCELLABLE_LINE,
         ],
       };
     case 'halted':
       return {
         title: 'Payments failed',
-        lines: ["Razorpay couldn't take your payment and has stopped trying, so Autopilot isn't running. Update your payment method to start again."],
+        lines: [
+          "Razorpay couldn't take your payment and has stopped trying, so Autopilot isn't running. Update your payment method to start again.",
+          NOT_CANCELLABLE_LINE,
+        ],
       };
     case 'paused':
-      return { title: 'Subscription paused', lines: ["Your subscription is paused, so Autopilot isn't running. Resume it to start again."] };
+      return { title: 'Subscription paused', lines: ["Your subscription is paused, so Autopilot isn't running. Resume it to start again.", NOT_CANCELLABLE_LINE] };
     case 'cancelled':
       return { title: 'Subscription cancelled', lines: ['Your subscription was cancelled. Subscribe to start again.'] };
     case 'completed':

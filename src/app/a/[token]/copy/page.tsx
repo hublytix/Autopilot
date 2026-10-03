@@ -53,7 +53,8 @@ function Part({ id, title, label, value, hint, multiline = false }: PartProps) {
 
 export default async function CopyReplyPage({ params }: { params: Params }) {
   const { token } = await params;
-  const state = await copyPageState(await getDeps(), token, await headers());
+  const requestHeaders = await headers();
+  const state = await copyPageState(await getDeps(), token, requestHeaders);
 
   if (state.type === 'message') {
     return (

@@ -3,7 +3,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { FAKE_ENV } from '@/server/env';
-import { HUBSPOT_OAUTH_CALLBACK_PATH, HUBSPOT_WEBHOOK_PATH, REQUIRED_SCOPES } from '@/server/hubspot/scopes';
+import { ASK_FOR_EMAIL_READ_SCOPE } from '@/server/hubspot/email-scope-switch';
+import { HUBSPOT_OAUTH_CALLBACK_PATH, HUBSPOT_WEBHOOK_PATH, REQUIRED_SCOPES, requiredScopesFor } from '@/server/hubspot/scopes';
 
 // D-02, D-03, D-06: the HubSpot app config committed in hubspot-app/ must agree with the code.
 // HubSpot blocks an install whose scope set differs from the app's, and signs webhooks over the exact
@@ -64,8 +65,12 @@ describe('REQUIRED_SCOPES', () => {
     expect(app.config.auth.requiredScopes).toEqual([...REQUIRED_SCOPES]);
   });
 
-  it('is exactly the D-03 set', () => {
-    expect(REQUIRED_SCOPES.join(' ')).toBe('oauth crm.objects.contacts.read forms sales-email-read');
+  it('is exactly the D-03 set the switch selects (sales-email-read unless D-03 path (b) is switched on)', () => {
+    expect(REQUIRED_SCOPES.join(' ')).toBe(
+      ASK_FOR_EMAIL_READ_SCOPE ? 'oauth crm.objects.contacts.read forms sales-email-read' : 'oauth crm.objects.contacts.read forms',
+    );
+    expect(requiredScopesFor(true).join(' ')).toBe('oauth crm.objects.contacts.read forms sales-email-read');
+    expect(requiredScopesFor(false).join(' ')).toBe('oauth crm.objects.contacts.read forms');
   });
 
   it('asks for nothing optional or conditional, and no write scope (law 2)', () => {

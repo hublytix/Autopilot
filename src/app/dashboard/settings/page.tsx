@@ -13,6 +13,7 @@ import {
   billingSummary,
   changeAlertNote,
   DISCONNECT_BILLING_RESULTS,
+  DISCONNECT_UNINSTALL_RESULTS,
   disconnectedLines,
   FOLLOWUPS_OFF_NOTE,
   INSTALL_PATH,
@@ -165,14 +166,16 @@ function ConnectionCard({ view }: { view: SettingsPageView }) {
 }
 
 export default async function SettingsPage({ searchParams }: { searchParams: SearchParams }) {
+  const requestHeaders = await headers();
   const deps = await getDeps();
-  const scope = await requireOwnerPage(deps, await headers());
+  const scope = await requireOwnerPage(deps, requestHeaders);
   const params = await searchParams;
   const view = await settingsPageView(scope, deps);
 
   const resultCode = single(params.result);
   const result = ownValue(SETTINGS_RESULTS, resultCode);
   const billingResult = resultCode === 'disconnected' || resultCode === 'already_disconnected' ? ownValue(DISCONNECT_BILLING_RESULTS, single(params.billing)) : undefined;
+  const uninstallResult = resultCode === 'disconnected' ? ownValue(DISCONNECT_UNINSTALL_RESULTS, single(params.uninstall)) : undefined;
   const sentRaw = single(params.sent);
   const savedLines =
     resultCode === 'preferences_saved'
@@ -195,6 +198,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
         </Alert>
       )}
       {billingResult === undefined || billingResult === null ? null : <Alert tone={billingResult.tone}>{billingResult.text}</Alert>}
+      {uninstallResult === undefined ? null : <Alert tone={uninstallResult.tone}>{uninstallResult.text}</Alert>}
       <StatusCard view={view} />
       <PreferencesCard view={view} />
       <FormsCard view={view} />

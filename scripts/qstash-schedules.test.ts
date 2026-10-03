@@ -10,10 +10,16 @@ import { buildSchedulePlan, CRON_ROUTES, destinationProblems, formatPlan, parseA
 const LIVE_LIKE = { APP_URL: 'https://autopilot.example.com', ENV_NAMESPACE: 'prod' } as const;
 
 describe('buildSchedulePlan', () => {
-  it('has the same routes and UTC schedules as vercel.json, in order', () => {
-    const vercel = JSON.parse(readFileSync(path.join(process.cwd(), 'vercel.json'), 'utf8')) as { crons: { path: string; schedule: string }[] };
-    const plan = buildSchedulePlan(LIVE_LIKE);
-    expect(plan.map((s) => ({ path: new URL(s.destination).pathname, schedule: s.cron }))).toEqual(vercel.crons);
+  it('has the PLAN §8.1 routes and UTC schedules, the same as vercel.json declares, in order', () => {
+    const planned = buildSchedulePlan(LIVE_LIKE).map((s) => ({ path: new URL(s.destination).pathname, schedule: s.cron }));
+    expect(planned).toEqual([
+      { path: '/api/cron/poll', schedule: '*/5 * * * *' },
+      { path: '/api/cron/weekly-report', schedule: '0 * * * *' },
+      { path: '/api/cron/daily', schedule: '17 3 * * *' },
+    ]);
+    // On Vercel Hobby the `crons` key is deleted and these schedules replace it (D-16, WIRE_UP 4.4).
+    const vercel = JSON.parse(readFileSync(path.join(process.cwd(), 'vercel.json'), 'utf8')) as { crons?: { path: string; schedule: string }[] };
+    expect(vercel.crons ?? planned).toEqual(planned);
     expect(CRON_ROUTES.map((r) => r.cron)).toEqual(['*/5 * * * *', '0 * * * *', '17 3 * * *']);
   });
 

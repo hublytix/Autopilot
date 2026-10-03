@@ -79,6 +79,7 @@ const ROUTES: Readonly<Record<string, 'rate_limited' | 'signature' | 'cron' | 'o
   'src/app/api/billing/cancel/route.ts': 'owner',
   'src/app/api/billing/resume/route.ts': 'owner',
   'src/app/api/onboarding/status/route.ts': 'owner',
+  'src/app/dev/actions/route.ts': 'dev_only',
   'src/app/dev/fake-checkout/[id]/decision/route.ts': 'dev_only',
   'src/app/dev/fake-hubspot/authorize/decision/route.ts': 'dev_only',
   // { ok, mode } only.

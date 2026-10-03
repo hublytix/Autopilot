@@ -5,10 +5,10 @@ Autopilot drafts replies and follow-ups for new HubSpot form leads; the owner se
 ## Where things are written down
 - `docs/BUILD_BRIEF.md`: the original spec. The product laws below always apply.
 - `docs/PLAN.md`: the approved plan (schema §5, routes §7, jobs §8, flows §9, security §10, tests §12, simulation §13, env §14, milestones §15). Build exactly what it says. If PLAN and DECISIONS disagree, PLAN wins; record the discrepancy.
-- `docs/DECISIONS.md`: D-01…D-82, the detailed rules behind the plan (D-53 records the M1 review fixes, D-54 the M2 build choices, D-55 the M2 review fixes, D-56…D-60 the M3 build choices, D-61 the M3 integration, D-62 the M3 review fixes, D-63…D-66 the M4 build choices, D-67 the M4 integration, D-68 the M4 review fixes, D-69…D-71 the M5 build choices, D-72 the M5 integration, D-73 the M5 review fixes, D-74…D-75 the M6 build choices, D-76 the M6 integration, D-77 the M6 review fixes, D-78…D-80 the M7 build choices, D-81 the M7 integration, D-82 the M7 review fixes).
-- `docs/RESEARCH.md` + `docs/research/*.md`: verified vendor facts and test vectors. Finding IDs in [brackets] point here.
-- `docs/ARCHITECTURE.md`: layers, data flow, where each concern lives.
-- `docs/WIRE_UP.md` (M8): connecting the real services.
+- `docs/DECISIONS.md`: D-01 onwards, the detailed rules behind the plan (D-01…D-52 the plan's decisions; D-53 the M1 review fixes, D-54 the M2 build choices, D-55 the M2 review fixes, D-56…D-60 the M3 build choices, D-61 the M3 integration, D-62 the M3 review fixes, D-63…D-66 the M4 build choices, D-67 the M4 integration, D-68 the M4 review fixes, D-69…D-71 the M5 build choices, D-72 the M5 integration, D-73 the M5 review fixes, D-74…D-75 the M6 build choices, D-76 the M6 integration, D-77 the M6 review fixes, D-78…D-80 the M7 build choices, D-81 the M7 integration, D-82 the M7 review fixes, D-83…D-84 the M8 build choices, D-85 the M8 integration, D-86 the M8 review fixes, D-87 the REVIEW verdicts; the live-check results follow). New entries take the next number.
+- `docs/RESEARCH.md` + `docs/research/*.md`: verified vendor facts and test vectors. Finding IDs in [brackets] point here; `npm run check:finding-ids` fails on any cited ID without a `### ID` section.
+- `docs/ARCHITECTURE.md`: layers, ports, data model, jobs, data flow, the lock order, the security and test maps, where each concern lives.
+- `docs/WIRE_UP.md`: connecting the real services, the PLAN §17 live checks, the post-deploy smoke test and key rotation.
 
 **Decide, don't ask.** Where the docs are silent, pick the simplest option that satisfies them and log the choice in `docs/DECISIONS.md`.
 
@@ -36,9 +36,10 @@ D-31 and D-49 define exactly which lead fields count as content and where conten
 - `src/instrumentation.ts` must stay in `src/`. Next 16 uses `src/proxy.ts`, not `middleware.ts`.
 
 ## Time: `$now` and `Clock` (D-28)
-- Never call `Date.now()`, argument-less `new Date()` or `DateTime.now()` outside `SystemClock` (`src/server/adapters/live/system-clock.ts`). Lint bans them, along with `Date` as a bare value, `performance.now()`, and the Luxon calls that fill in "now" (`DateTime.local()/utc()` without a full date, `fromObject` without `year`, `toRelative()` without `base`, `diffNow()`, `Settings.now()`). Never disable these rules inline; a test forbids it.
+- Never call `Date.now()`, argument-less `new Date()` or `DateTime.now()` outside `SystemClock` (`src/server/adapters/live/system-clock.ts`). Lint bans them, along with `Date` as a bare value, `performance.now()`, and the Luxon calls that fill in "now" (`DateTime.local()/utc()` without a full date, `fromObject` without `year`, `toRelative()` without `base`, `diffNow()`, `Settings.now()`). Never disable these rules inline; a test forbids it. The one other file the rule exempts is the simulation's `scripts/simulation/system-time-preload.mjs`, which replaces the wall clock for the 2030 repeat run and never reads it.
 - Every container points Luxon's `Settings.now` at its `Clock`; in Vitest it is a fixed year-2000 instant (`test/setup/luxon-clock.ts`).
 - Every timestamp comes from the injected `Clock` (`deps.clock.now()`), and SQL binds it as a parameter (`$now`). That includes the `created_at` columns that drive behaviour.
+- A new migration is applied to the live database (`supabase db push`) before the commit that uses it reaches the production branch, and stays additive (`docs/WIRE_UP.md` step 2, "Later deploys"). Never edit an applied migration.
 - No `now()`, `current_timestamp` or `clock_timestamp` in SQL. The only exceptions are `default now()` on the audit-only columns `audit_log.at` and `webhook_events.received_at`; a migration test scans for the rest.
 
 ## Data and privacy in code
@@ -51,7 +52,8 @@ D-31 and D-49 define exactly which lead fields count as content and where conten
 - Never call live services (HubSpot, Supabase, Vercel, Upstash, Resend, Anthropic, Razorpay, Sentry) and never create accounts. Tests, fake mode and the simulation use fakes and PGlite only.
 - Never write real secrets. Only the documented fake values (`FAKE_ENV` in `src/server/env.ts`) and `.env.example`.
 - Tests are Vitest, deterministic: inject the `Clock`, fake timers only, no network. Name tests after behaviour.
-- `APP_MODE` (`fake` | `live`) is required. Fake mode needs no other variable.
+- `APP_MODE` (`fake` | `live`) is required. Fake mode needs no other variable. A new variable goes into `env.ts`, `.env.example` (with a one-line comment and its default) and WIRE_UP Appendix B.
+- Install packages with `npx -y npm@11.21.0 install --save-exact <pkg>@<version>` (npm 10's `npm install` crashes on this tree); CI and Vercel use `npm ci`.
 
 ## Milestone gate (every milestone ends with all of these green)
 ```sh
@@ -60,7 +62,9 @@ npm run lint
 npm test
 APP_MODE=fake npm run build
 APP_MODE=fake npm run smoke      # /api/health, /, /login return 200
-npm run simulate                 # writes outbox/summary.json; exits non-zero if a check fails
+APP_MODE=fake npm run e2e:fake   # install → onboarding → dashboard → settings → billing → Disconnect → /admin against next start, no JavaScript
+npm run simulate                 # writes outbox/summary.json, repeats every scenario at a 2030 system time; exits non-zero if a check fails or the runs differ
 npm run check:bundle             # no secrets or server-only env names in .next/static or the prerendered pages
+npm run check:finding-ids        # every finding ID cited in PLAN, DECISIONS, WIRE_UP and ARCHITECTURE has a research section
 ```
-Then one commit (specific paths only) and a 5-line summary. CI (`.github/workflows/ci.yml`) runs the same gates, plus `npm run e2e:fake` (the onboarding end to end against `next start` in fake mode, without JavaScript).
+Then one commit (specific paths only) and a 5-line summary. CI (`.github/workflows/ci.yml`) runs the same gates on every push and pull request.

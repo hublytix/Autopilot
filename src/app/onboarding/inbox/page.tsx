@@ -322,8 +322,9 @@ function NextSteps({ view }: { view: InboxCheckPageView }) {
 
 export default async function OnboardingInboxPage({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
+  const requestHeaders = await headers();
   const deps = await getDeps();
-  const scope = await requireOwnerPage(deps, await headers());
+  const scope = await requireOwnerPage(deps, requestHeaders);
   const view = await loadInboxCheckPage(scope, deps);
   const result = typeof params.result === 'string' ? params.result : undefined;
   const alert = ownValue(RESULT_ALERTS, result);

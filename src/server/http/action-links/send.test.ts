@@ -248,7 +248,11 @@ describe('GET /a/{token}/send', () => {
       const res = await send(lead.sendToken);
       expect(res.status).toBe(410);
       expectPrivate(res);
-      expect(await res.text()).toContain('This draft has expired');
+      const page = await res.text();
+      expect(page).toContain('This draft has expired');
+      // Retention runs from submittedAt (purge_at, D-49), not from when the lead reached us.
+      expect(page).toContain('deleted 30 days after the form was submitted (24 hours for test leads)');
+      expect(page).not.toContain('after the lead arrives');
       expect((await clickStateOf(getDb(), lead)).useCount).toBe(0);
     });
 

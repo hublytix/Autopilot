@@ -9,9 +9,11 @@
 // production: with both Vercel Cron and these schedules, each tick runs twice (the leases make that
 // harmless, but it doubles the work). A new schedule can take up to 60 s to become active.
 //
-// Usage (the live environment, e.g. pulled with `vercel env pull .env.production.local`):
-//   npx tsx --env-file=.env.production.local --tsconfig tsconfig.scripts.json scripts/qstash-schedules.ts --dry-run
-//   npx tsx --env-file=.env.production.local --tsconfig tsconfig.scripts.json scripts/qstash-schedules.ts
+// Usage (the live values in the gitignored worksheet `.env.wireup`, docs/WIRE_UP.md step 0.5; not
+// `.env.production.local`, which `next build`/`next start` would load, and Vercel's "Sensitive"
+// variables pull back empty anyway):
+//   npx tsx --env-file=.env.wireup --tsconfig tsconfig.scripts.json scripts/qstash-schedules.ts --dry-run
+//   npx tsx --env-file=.env.wireup --tsconfig tsconfig.scripts.json scripts/qstash-schedules.ts
 // --dry-run prints the plan and calls nothing. A real run needs APP_MODE=live and an https APP_URL
 // QStash can reach. The QStash token is never printed.
 import { resolve } from 'node:path';

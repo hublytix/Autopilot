@@ -46,7 +46,8 @@ function LeadMessage({ text }: { text: string | null }) {
 
 export default async function EditReplyPage({ params }: { params: Params }) {
   const { token } = await params;
-  const state = await editPageState(await getDeps(), token, await headers());
+  const requestHeaders = await headers();
+  const state = await editPageState(await getDeps(), token, requestHeaders);
 
   if (state.type === 'message') {
     return (

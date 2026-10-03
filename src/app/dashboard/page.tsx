@@ -58,8 +58,9 @@ function StatusCard({ status }: { status: StatusCardView }) {
 }
 
 export default async function DashboardPage({ searchParams }: { searchParams: SearchParams }) {
+  const requestHeaders = await headers();
   const deps = await getDeps();
-  const scope = await requireOwnerPage(deps, await headers());
+  const scope = await requireOwnerPage(deps, requestHeaders);
   const params = await searchParams;
   const reconnectRequested = single(params.reconnect) === '1';
   const view = await dashboardView(scope, deps, { reconnectRequested });

@@ -44,8 +44,9 @@ function History({ versions }: { versions: readonly BriefVersionRow[] }) {
 }
 
 export default async function DashboardBriefPage({ searchParams }: { searchParams: SearchParams }) {
+  const requestHeaders = await headers();
   const deps = await getDeps();
-  const scope = await requireOwnerPage(deps, await headers());
+  const scope = await requireOwnerPage(deps, requestHeaders);
   const view = await dashboardBriefView(scope, deps);
   const params = await searchParams;
   const saved = typeof params.saved === 'string' && /^\d{1,9}$/.test(params.saved) ? params.saved : null;

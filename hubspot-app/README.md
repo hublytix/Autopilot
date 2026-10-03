@@ -18,8 +18,8 @@ uses at runtime:
 
 | File and field | Placeholder | Must equal |
 |---|---|---|
-| `app-hsmeta.json` `config.auth.redirectUrls[0]` | `https://autopilot.example.com/api/hubspot/oauth/callback` | `HUBSPOT_REDIRECT_URI` (default `${APP_URL}/api/hubspot/oauth/callback`) |
-| `webhooks-hsmeta.json` `config.settings.targetUrl` | `https://autopilot.example.com/api/hubspot/webhooks` | `HUBSPOT_WEBHOOK_TARGET_URL` (default `${APP_URL}/api/hubspot/webhooks`) |
+| `app-hsmeta.json` `config.auth.redirectUrls[0]` | `https://autopilot.example.com/api/hubspot/oauth/callback` | `HUBSPOT_REDIRECT_URI` (required in live mode, no default; must equal `${APP_URL}/api/hubspot/oauth/callback`; only fake mode derives it) |
+| `webhooks-hsmeta.json` `config.settings.targetUrl` | `https://autopilot.example.com/api/hubspot/webhooks` | `HUBSPOT_WEBHOOK_TARGET_URL` (required in live mode, no default; must equal `${APP_URL}/api/hubspot/webhooks`; only fake mode derives it) |
 | `app-hsmeta.json` `config.support.*` | `autopilot.example.com` addresses | The real support address and pages |
 
 Why byte for byte:
@@ -40,8 +40,14 @@ fails if the two drift apart, if a write scope appears, or if any optional scope
 The `forms` scope would also allow form edits. Autopilot never makes any: every HubSpot request
 passes the allow-list in `src/server/security/hubspot-allow-list.ts` before it reaches the network.
 
-If WIRE_UP finds that `sales-email-read` cannot be granted (D-03 path b), remove it from both
-`requiredScopes` and `REQUIRED_SCOPES` in the same change.
+If WIRE_UP finds that `sales-email-read` cannot be granted (D-03 path b), change two files in one
+commit: set `ASK_FOR_EMAIL_READ_SCOPE = false` in `src/server/hubspot/email-scope-switch.ts`
+(`REQUIRED_SCOPES` follows, and `canReadEmails` is then false for every grant), and remove
+`"sales-email-read"` from `requiredScopes` here. `test/hubspot/app-config.test.ts` checks the two
+agree, and `test/hubspot/email-scope-path-b.test.ts` already runs path (b). For fake mode to match,
+also drop it from `grantedScopes` in `test/fixtures/hubspot-portal.json` and re-baseline the
+simulation checks that rely on logged emails; then run every gate. docs/WIRE_UP.md 9.5 row 1 has the
+whole procedure.
 
 ## Webhooks (D-06)
 
@@ -52,7 +58,7 @@ If WIRE_UP finds that `sales-email-read` cannot be granted (D-03 path b), remove
 
 Settings changes can take up to 5 minutes to apply after an upload.
 
-## Upload (WIRE_UP step 1; full steps arrive in docs/WIRE_UP.md)
+## Upload (docs/WIRE_UP.md step 1 has the full steps)
 
 ```sh
 npm install -g @hubspot/cli     # Node >= 20

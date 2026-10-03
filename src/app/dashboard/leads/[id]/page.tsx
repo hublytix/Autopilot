@@ -180,8 +180,9 @@ function Message({ view }: { view: LeadDetailView }) {
 }
 
 export default async function LeadPage({ params, searchParams }: { params: Params; searchParams: SearchParams }) {
+  const requestHeaders = await headers();
   const deps = await getDeps();
-  const scope = await requireOwnerPage(deps, await headers());
+  const scope = await requireOwnerPage(deps, requestHeaders);
   const { id } = await params;
   // HubSpot first (bounded, never throws), so the page shows what it found.
   const refresh = await refreshLeadSignals(scope, deps, id);

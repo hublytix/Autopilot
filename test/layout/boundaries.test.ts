@@ -29,6 +29,27 @@ describe('server-only', () => {
   });
 });
 
+describe('nothing builds the container at `next build` (D-29)', () => {
+  it('every page and layout reads the request before getDeps(), so the prerender attempt stops first', async () => {
+    const entries = await readdir(path.join(root, 'src', 'app'), { withFileTypes: true, recursive: true });
+    const files = entries
+      .filter((entry) => entry.isFile() && /^(?:page|layout)\.tsx$/.test(entry.name))
+      .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)));
+    const late: string[] = [];
+    let checked = 0;
+    for (const file of files) {
+      const text = await readFile(path.join(root, file), 'utf8');
+      const deps = text.indexOf('getDeps(');
+      if (deps === -1) continue;
+      checked += 1;
+      const request = [text.indexOf('await headers()'), text.indexOf('await connection()'), text.indexOf('await cookies()')].filter((i) => i !== -1);
+      if (request.length === 0 || Math.min(...request) > deps) late.push(file);
+    }
+    expect(checked).toBeGreaterThan(15);
+    expect(late).toEqual([]);
+  });
+});
+
 describe('ESLint guards', () => {
   let eslint: ESLint;
 
@@ -133,10 +154,17 @@ describe('ESLint guards', () => {
     ['dt.toRelativeCalendar({ unit })', "import type { DateTime } from 'luxon';\nexport const t = (dt: DateTime) => dt.toRelativeCalendar({ unit: 'days' });\n"],
     ['dt.diffNow()', "import type { DateTime } from 'luxon';\nexport const t = (dt: DateTime) => dt.diffNow();\n"],
   ])('bans the wall clock (%s) everywhere but SystemClock', async (_name, code) => {
-    for (const file of ['src/server/services/x.ts', 'src/server/domain/x.ts', 'src/app/x/page.tsx', 'scripts/x.ts', 'test/x.test.ts']) {
+    for (const file of ['src/server/services/x.ts', 'src/server/domain/x.ts', 'src/app/x/page.tsx', 'scripts/x.ts', 'scripts/simulation/x.mjs', 'test/x.test.ts']) {
       expect(await rulesFiredAt(file, code), file).toContain(SYNTAX);
     }
     expect(await rulesFiredAt('src/server/adapters/live/system-clock.ts', code)).not.toContain(SYNTAX);
+  });
+
+  it('exempts exactly SystemClock and the simulation\'s system-time preload from the wall-clock ban', async () => {
+    const config = await readFile(path.join(root, 'eslint.config.mjs'), 'utf8');
+    expect(/name: 'autopilot\/time-api-ban',\s*files: ALL_FILES,\s*ignores: \[SYSTEM_CLOCK, SIMULATED_SYSTEM_TIME\],/.test(config)).toBe(true);
+    expect(config).toContain("const SIMULATED_SYSTEM_TIME = 'scripts/simulation/system-time-preload.mjs';");
+    expect(await rulesFiredAt('scripts/simulation/system-time-preload.mjs', 'export const t = Date.now();\n')).not.toContain(SYNTAX);
   });
 
   it.each([

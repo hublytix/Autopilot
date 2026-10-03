@@ -227,6 +227,13 @@ describe('container', () => {
     expect(Settings.now).toBe(before);
   });
 
+  it('refuses to build during `next build` (no PGlite opened, no live client built), and is not cached', async () => {
+    vi.stubEnv('APP_MODE', 'fake');
+    vi.stubEnv('NEXT_PHASE', 'phase-production-build');
+    await expect(getDeps()).rejects.toMatchObject({ name: 'ConfigError', code: 'container_at_build' });
+    expect(store.__autopilot).toBeUndefined();
+  });
+
   it('an invalid environment rejects and is not cached', async () => {
     vi.stubEnv('APP_MODE', 'staging');
     await expect(getContainer()).rejects.toBeInstanceOf(EnvError);

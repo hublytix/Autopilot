@@ -11,8 +11,10 @@ const productName = process.env.NEXT_PUBLIC_PRODUCT_NAME ?? 'Hublytix Autopilot'
 
 export const metadata: Metadata = {
   title: { default: productName, template: `%s · ${productName}` },
+  // Not brief §1's one-liner: that stays word for word on / only (§5.13), with its qualifier; every
+  // other page's snippet says what the product does (laws 1 and 5, D-86).
   description:
-    'Answers and follows up every new lead automatically for HubSpot Starter users, for $49 a month.',
+    'Drafts your replies and day-2 and day-5 follow-ups for new HubSpot form leads; you send them from your own mail app. $49 a month after a 14-day free trial.',
 };
 
 export const viewport: Viewport = {

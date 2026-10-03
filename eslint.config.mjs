@@ -10,6 +10,9 @@ const ALL_FILES = ['**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}'];
 // Tests wire fakes into services and read fixtures, so the import boundaries do not apply to them.
 const TEST_FILES = ['**/*.test.ts', '**/*.test.tsx'];
 const SYSTEM_CLOCK = 'src/server/adapters/live/system-clock.ts';
+// The simulation's repeat run replaces the process's wall clock with a 2030 one (PLAN §13); this
+// preload swaps Date and performance.timeOrigin and reads only the monotonic clock.
+const SIMULATED_SYSTEM_TIME = 'scripts/simulation/system-time-preload.mjs';
 // Compose-link builders wherever they live (domain, views, actions, services).
 const COMPOSE_FILES = ['src/**/compose*.{ts,tsx}', 'src/**/compose/**/*.{ts,tsx}', 'src/**/compose-*/**/*.{ts,tsx}'];
 
@@ -331,7 +334,7 @@ export default defineConfig([
   {
     name: 'autopilot/time-api-ban',
     files: ALL_FILES,
-    ignores: [SYSTEM_CLOCK],
+    ignores: [SYSTEM_CLOCK, SIMULATED_SYSTEM_TIME],
     rules: { 'no-restricted-syntax': ['error', ...TIME_BANS] },
   },
   {

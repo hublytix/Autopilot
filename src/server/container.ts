@@ -50,8 +50,15 @@ type ContainerGlobal = typeof globalThis & { __autopilot?: Promise<Container> | 
 
 const store = globalThis as ContainerGlobal;
 
-/** The process-wide container, built on first use. A failed build is not cached. */
+/**
+ * The process-wide container, built on first use. A failed build is not cached. Never during
+ * `next build` (D-29): pages read the request (`await headers()`) before getDeps(), so the prerender
+ * attempt stops there; anything that still got here would open and migrate fake mode's PGlite
+ * directory (the one a running `npm start` uses) or build the live clients at build time, so it is
+ * refused loudly instead.
+ */
 export function getContainer(): Promise<Container> {
+  if (process.env.NEXT_PHASE === 'phase-production-build') return Promise.reject(new ConfigError('container_at_build'));
   const existing = store.__autopilot;
   if (existing !== undefined) return existing;
   const building: Promise<Container> = (async () => buildContainer(getEnv()))().catch((error: unknown) => {
@@ -170,8 +177,8 @@ async function buildFakeContainer(env: Env, baseClock: Clock): Promise<Container
 // ---------------------------------------------------------------------------------------------
 
 /**
- * A port whose live adapter arrives in a later milestone (PLAN §15): every method call throws
- * ConfigError('live_adapter_not_built'), so live mode fails loudly rather than half-working.
+ * Every live port is built by buildLiveAdapters; this Proxy only backs a port a caller (tests) leaves
+ * out of createLiveDeps, and fails loudly: every method call throws ConfigError('live_adapter_not_built').
  */
 function liveAdapterNotBuilt<T extends object>(): T {
   return new Proxy({} as T, {
@@ -186,8 +193,9 @@ function liveAdapterNotBuilt<T extends object>(): T {
 }
 
 /**
- * The live adapters (PLAN §15): M2 brings HubSpot, the LLM, the mailer and the scheduler; M3 the
- * AuthProvider (Supabase) and the WebFetcher (undici behind the SSRF guard); M7 Razorpay billing.
+ * The live adapters, one per port: HubSpot, the LLM (Anthropic), the mailer (Resend), the scheduler
+ * (QStash), the AuthProvider (Supabase), the WebFetcher (undici behind the SSRF guard) and billing
+ * (Razorpay). buildLiveAdapters supplies all seven.
  */
 export interface LiveAdapters {
   hubspot: HubSpotClient;

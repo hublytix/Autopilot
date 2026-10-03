@@ -41,7 +41,8 @@ function InstallAgain({ title, body }: { title: string; body: string }) {
 
 export default async function OnboardingEmailPage({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
-  const state = await onboardingEmailPageState(await getDeps(), await headers());
+  const requestHeaders = await headers();
+  const state = await onboardingEmailPageState(await getDeps(), requestHeaders);
 
   if (state.type === 'no_install') {
     return (

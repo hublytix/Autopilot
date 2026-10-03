@@ -2,7 +2,7 @@ import 'server-only';
 
 // Lead intake (PLAN §9.2, D-05, D-06, D-07, D-14, D-16, D-31): the HubSpot webhook's processing,
 // pollPortal, the portal_poll job and the poll cron.
-export { insertLead, insertLeadInTx, LEAD_CONTENT_RETENTION_MS } from './insert-lead';
+export { insertLead, insertLeadInTx, LEAD_CONTENT_RETENTION_MS, leadContentPurgeAt } from './insert-lead';
 // The lead_process dedupe key is owned by the lead_process service; re-exported for intake callers.
 export { leadProcessDedupeKey } from '@/server/services/leads/process';
 export type { InsertedLead, NewLead } from './insert-lead';

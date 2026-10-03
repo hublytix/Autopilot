@@ -31,8 +31,9 @@ function failureText(code: string | null): string {
 }
 
 export default async function OnboardingBriefPage() {
+  const requestHeaders = await headers();
   const deps = await getDeps();
-  const scope = await requireOwnerPage(deps, await headers());
+  const scope = await requireOwnerPage(deps, requestHeaders);
   const view = await briefPageView(scope, deps);
   const { editor } = view;
   const running = editor.generation.inProgress;

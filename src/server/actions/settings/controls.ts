@@ -1,7 +1,7 @@
 import 'server-only';
 import type { Deps } from '@/server/ports';
 import type { OwnerScope } from '@/server/services/auth/owner-scope';
-import { disconnectHubSpot, type DisconnectBillingOutcome, type DisconnectOptions } from '@/server/services/disconnect';
+import { disconnectHubSpot, type DisconnectBillingOutcome, type DisconnectOptions, type HubSpotStepOutcome } from '@/server/services/disconnect';
 import { saveFormSelection, savePreferences } from '@/server/services/onboarding';
 import { pauseAll, resumeAll } from '@/server/services/owner-controls';
 import { parsePreferencesForm, preferencesInputFromValues } from '@/server/actions/onboarding/parse';
@@ -41,6 +41,13 @@ export const DISCONNECT_BILLING_CODES = [
   'nothing_to_cancel',
   'failed',
 ] as const satisfies readonly DisconnectBillingOutcome[];
+
+/**
+ * `?uninstall=` after a disconnect, only when HubSpot's uninstall did not happen: `failed` (the call
+ * failed; never retried) or `skipped` (no usable token, e.g. a revoked connection). The page then
+ * tells the owner to remove the app in HubSpot, so "Disconnecting uninstalls the app" (D-03) holds.
+ */
+export const DISCONNECT_UNINSTALL_CODES = ['failed', 'skipped'] as const satisfies readonly HubSpotStepOutcome[];
 
 function withResult(code: SettingsResultCode, extra: readonly string[] = []): string {
   return `${SETTINGS_PATH}?${[`result=${code}`, ...extra].join('&')}`;
@@ -84,5 +91,7 @@ export async function runDisconnect(deps: Deps, scope: OwnerScope, formData: For
   const cancelBilling = formData.get('cancel_billing') === 'on';
   const result = await disconnectHubSpot(deps, scope, { cancelBilling }, options);
   if (result.type === 'account_missing') return SETTINGS_PATH;
-  return withResult(result.type, [`billing=${result.billing}`]);
+  const extra = [`billing=${result.billing}`];
+  if (result.type === 'disconnected' && result.uninstall !== 'done') extra.push(`uninstall=${result.uninstall}`);
+  return withResult(result.type, extra);
 }

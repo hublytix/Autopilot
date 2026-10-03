@@ -76,8 +76,9 @@ function Action({ view }: { view: BillingPageView }) {
 }
 
 export default async function BillingPage({ searchParams }: { searchParams: SearchParams }) {
+  const requestHeaders = await headers();
   const deps = await getDeps();
-  const scope = await requireOwnerPage(deps, await headers());
+  const scope = await requireOwnerPage(deps, requestHeaders);
   const view = await billingPageView(deps, scope);
   if (view === null) notFound();
   const result = ownValue(BILLING_RESULTS, single((await searchParams).result));

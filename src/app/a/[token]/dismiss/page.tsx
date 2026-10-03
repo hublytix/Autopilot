@@ -26,7 +26,8 @@ const MUTED = 'text-base text-neutral-700 dark:text-neutral-300';
 export default async function DismissLeadPage({ params, searchParams }: { params: Params; searchParams: SearchParams }) {
   const { token } = await params;
   const { result } = await searchParams;
-  const state = await dismissPageState(await getDeps(), token, await headers());
+  const requestHeaders = await headers();
+  const state = await dismissPageState(await getDeps(), token, requestHeaders);
 
   switch (state.type) {
     case 'confirm': {

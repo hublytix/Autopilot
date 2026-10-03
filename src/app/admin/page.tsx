@@ -88,8 +88,9 @@ const FAILED_JOB_COLUMNS: readonly Column<FailedJob>[] = [
 ];
 
 export default async function AdminPage() {
+  const requestHeaders = await headers();
   const deps = await getDeps();
-  const admin = await requireAdminPage(deps, await headers());
+  const admin = await requireAdminPage(deps, requestHeaders);
   const view = await adminPageView(deps, admin);
 
   return (

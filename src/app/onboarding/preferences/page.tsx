@@ -20,8 +20,9 @@ export const metadata: Metadata = {
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 export default async function OnboardingPreferencesPage({ searchParams }: { searchParams: SearchParams }) {
+  const requestHeaders = await headers();
   const deps = await getDeps();
-  const scope = await requireOwnerPage(deps, await headers());
+  const scope = await requireOwnerPage(deps, requestHeaders);
   const params = await searchParams;
   const view = await preferencesPageView(scope, deps);
   const { preferences } = view;

@@ -17,6 +17,7 @@
     "smoke": "tsx --tsconfig tsconfig.scripts.json scripts/smoke.ts",
     "e2e:fake": "tsx --tsconfig tsconfig.scripts.json scripts/e2e-fake.ts",
     "check:bundle": "tsx --tsconfig tsconfig.scripts.json scripts/check-bundle.ts",
+    "check:finding-ids": "tsx --tsconfig tsconfig.scripts.json scripts/check-finding-ids.ts",
     "qstash:schedules": "tsx --tsconfig tsconfig.scripts.json scripts/qstash-schedules.ts"
   },
   "dependencies": {

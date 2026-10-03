@@ -21,7 +21,7 @@ export const ACTION_LINK_MESSAGES = {
   expired: {
     title: 'This draft has expired',
     paragraphs: [
-      'Drafts and lead details are deleted 30 days after the lead arrives (24 hours for test leads), so your reply can no longer be opened.',
+      'Drafts and lead details are deleted 30 days after the form was submitted (24 hours for test leads), so your reply can no longer be opened.',
       'The contact is still in HubSpot.',
     ],
   },

@@ -6,6 +6,7 @@ import { seedAccount, seedConnection } from '@/server/jobs/testing';
 import { seedOwner } from '@/server/services/accounts/testing';
 import { runDailyCron } from '@/server/services/daily';
 import { disconnectOrphan, reconcileBillingTombstones } from '@/server/services/purge';
+import { insertLead, leadContentPurgeAt } from '@/server/services/intake';
 import { privacyDeleteJobHandler } from '@/server/services/privacy';
 import { useTestDb as setUpTestDb } from '../db/harness';
 import {
@@ -90,6 +91,31 @@ describe('content retention (PLAN §9.10 steps 1-4)', () => {
     rig.clock.set(at(recent.purgeAt, 5 * MINUTE));
     expect(await runRetentionGuard(rig.deps)).toMatchObject({ ran: true, leadMessagesDeleted: 1 });
     expect(await contentOf(db, recent.leadId)).toEqual(CONTENT_GONE);
+  });
+
+  it('never keeps content more than 30 d after it was stored, even when HubSpot reports a submittedAt in the future', async () => {
+    const db = getDb();
+    const { accountId } = await seedInstalledAccount(rig);
+    const stored = rig.clock.now();
+    const inserted = await insertLead(db, {
+      accountId,
+      contactId: '9901',
+      formId: 'form-future',
+      submittedAt: at(stored, DAY),
+      conversionId: null,
+      submissionKey: 'future-submission-key',
+      trigger: 'cron',
+      content: { email: 'future.lead@example.net', firstName: 'Fern', lastName: null, company: null, message: 'A message from tomorrow' },
+      now: stored,
+    });
+    if (inserted === null) throw new Error('lead not inserted');
+    const row = await db.one<{ purge_at: Date }>(`select purge_at from lead_messages where lead_id = $1`, [inserted.leadId]);
+    expect(row.purge_at).toEqual(at(stored, 30 * DAY));
+    expect(leadContentPurgeAt(at(stored, -DAY), stored)).toEqual(at(stored, 29 * DAY));
+
+    rig.clock.set(at(stored, 30 * DAY));
+    expect(await runRetentionGuard(rig.deps)).toMatchObject({ ran: true, leadMessagesDeleted: 1 });
+    expect((await contentOf(db, inserted.leadId)).message).toBe(false);
   });
 
   it('removes test-lead content and the inbox check test address after 24 h, closing an abandoned check', async () => {

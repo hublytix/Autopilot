@@ -157,6 +157,20 @@ describe('/dashboard/settings', () => {
     expect(html).toContain('href="/api/hubspot/install"');
     expect(html).not.toContain('href="/dashboard/settings/disconnect"');
     expect(html).toContain('data-state="disconnected"');
+    expect(words).not.toContain('uninstall the app');
+  });
+
+  it('after a disconnect whose uninstall failed or could not run: says to remove the app in HubSpot (D-03 kept true)', async () => {
+    await disconnectHubSpot(rig.deps, account.scope, { cancelBilling: false }, { sleep: rig.sleep });
+    const failed = text(await settingsPage({ result: 'disconnected', billing: 'not_requested', uninstall: 'failed' }));
+    expect(failed).toContain(
+      "We couldn't uninstall the app from HubSpot for you. Remove it in HubSpot under Settings → Integrations → Connected apps.",
+    );
+    const skipped = text(await settingsPage({ result: 'disconnected', billing: 'not_requested', uninstall: 'skipped' }));
+    expect(skipped).toContain("Autopilot had already lost access to HubSpot, so it couldn't ask HubSpot to uninstall the app.");
+    // Only after this disconnect, and only our own codes.
+    expect(text(await settingsPage({ result: 'already_disconnected', uninstall: 'failed' }))).not.toContain('uninstall the app');
+    expect(text(await settingsPage({ result: 'disconnected', uninstall: 'constructor' }))).not.toContain('uninstall the app');
   });
 
   it('asks robots not to index or follow', async () => {

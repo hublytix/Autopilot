@@ -15,12 +15,21 @@ import type { LeadContent } from './submission';
 //    refused here (docs/ARCHITECTURE.md, row lock order). The webhook's dedupe key is
 //    `portalId:subscriptionType:objectId:eventId:occurredAt`, so its third part is the contact id;
 // 2. its content in `lead_messages`, through a CTE on the lead insert's RETURNING, so content can
-//    never exist without its lead (D-31); purged at submittedAt + 30 d;
+//    never exist without its lead (D-31); purged at min(submittedAt, $now) + 30 d;
 // 3. the `lead_process` job (dedupe `lead:{id}:process:r0`).
 // The caller publishes the job after commit.
 
 /** Lead content lives for 30 days after the submission (D-31, D-49). */
 export const LEAD_CONTENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * When a lead's content is purged: 30 d after the submission, counted from `$now` at the latest. A
+ * submittedAt in the future (clock skew, a bad value from HubSpot) never keeps content longer than
+ * 30 d after it was stored (law 4). The drafts copy this value (drafting/repository.ts).
+ */
+export function leadContentPurgeAt(submittedAt: Date, now: Date): Date {
+  return new Date(Math.min(submittedAt.getTime(), now.getTime()) + LEAD_CONTENT_RETENTION_MS);
+}
 
 export interface NewLead {
   accountId: string;
@@ -44,7 +53,7 @@ export interface InsertedLead {
 
 /** Inside the caller's transaction. Null when the lead already exists, the account stopped being active, or the contact was privacy-deleted. */
 export async function insertLeadInTx(tx: Db, lead: NewLead): Promise<InsertedLead | null> {
-  const purgeAt = new Date(lead.submittedAt.getTime() + LEAD_CONTENT_RETENTION_MS);
+  const purgeAt = leadContentPurgeAt(lead.submittedAt, lead.now);
   const row = await tx.maybeOne<{ id: string }>(
     `with lead as (
        insert into leads (account_id, hubspot_contact_id, form_id, submitted_at, conversion_id, submission_key,

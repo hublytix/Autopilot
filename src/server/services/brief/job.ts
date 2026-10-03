@@ -5,7 +5,7 @@ import { JobOutcomes, type JobContext, type JobFailureInfo, type JobOutcome, typ
 import { log } from '@/server/obs/log';
 import type { Deps } from '@/server/ports';
 import type { LlmResult, BriefDraft } from '@/server/ports/llm';
-import { aiCallRecord, recordAiCall } from '@/server/services/classification';
+import { aiCallRecord, isAiDailyBudgetTripped, recordAiCall } from '@/server/services/classification';
 import { crawlSite, type CrawlOptions } from './crawl';
 import type { ExtractedPage } from './extract';
 import { BRIEF_JOB_BUDGET_MS, CRAWL_BUDGET_MS, MIN_LLM_BUDGET_MS } from './limits';
@@ -23,9 +23,9 @@ import { insertGeneratedVersion } from './repository';
 //    aborted) with between_tools / high / 4096;
 // 4. post-processes the answer (FAQs ≤ 8, allow_pricing false, the booking link only if https and
 //    visible in the pages, never_promise trimmed) and stores it as a `generated` version.
-// A refusal, invalid output, an unreadable homepage (blocked, robots.txt, not HTML, 4xx) or a
-// missing website ends the brief job `failed` at once: the editor opens empty (or on the saved
-// brief). A timeout, max_tokens, a 5xx or a transient API error is retried by QStash; after the final
+// A refusal, invalid output, an unreadable homepage (blocked, robots.txt, not HTML, 4xx), a
+// missing website or a tripped AI budget breaker (D-36, checked before the crawl) ends the brief
+// job `failed` at once: the editor opens empty (or on the saved brief). A timeout, max_tokens, a 5xx or a transient API error is retried by QStash; after the final
 // delivery (or the failure callback, or the sweeper) the failure path marks the brief job `failed`.
 // A fatal configuration error fails the job permanently, with the admin alert every failure raises.
 // Logs carry ids, counts and codes only: never the website address, page text or the brief.
@@ -108,6 +108,10 @@ export function createBriefGenerateHandler(options: BriefJobOptions = {}) {
     if (delivery === null) return JobOutcomes.skipped();
     const sourceUrl = delivery.sourceUrl;
     if (sourceUrl === null) return failNow(deps, ctx, delivery, accountId, 'site_url_missing');
+    // The AI budget breaker (D-36), the global budget and this account's share: no model call, so the
+    // brief job fails at once and the owner fills in the empty editor (no crawl either: its only use
+    // is the model call). The breaker raises its own once-a-day admin alert.
+    if (await isAiDailyBudgetTripped(deps, { accountId })) return failNow(deps, ctx, delivery, accountId, 'ai_budget');
 
     const deadline = ctx.claimedAt.getTime() + BRIEF_JOB_BUDGET_MS;
     const crawl = await crawlSite(deps.webFetcher, sourceUrl, {

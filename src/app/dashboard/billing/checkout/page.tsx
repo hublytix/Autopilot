@@ -19,8 +19,9 @@ export const metadata: Metadata = {
 };
 
 export default async function BillingCheckoutPage() {
+  const requestHeaders = await headers();
   const deps = await getDeps();
-  const scope = await requireOwnerPage(deps, await headers());
+  const scope = await requireOwnerPage(deps, requestHeaders);
   const link = await openCheckoutLink(deps, scope);
 
   if (link === null) {

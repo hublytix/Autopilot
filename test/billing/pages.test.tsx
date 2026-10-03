@@ -215,6 +215,9 @@ describe('/dashboard/billing', () => {
     expect(html).toContain('href="https://rzp.io/i/UpdateCard"');
     expect(text(html)).toContain('Update payment method');
     expect(text(html)).toContain('Autopilot keeps running until 28 Oct 2026, 10:00.');
+    // Razorpay can't cancel a pending subscription (D-48): no Cancel button, and the page says so.
+    expect(html).not.toContain('data-action="cancel"');
+    expect(text(html)).toContain("While a payment has failed or your subscription is paused, it can't be cancelled here");
   });
 
   it('halted without a usable link: no button, says where the link is', async () => {
@@ -225,13 +228,16 @@ describe('/dashboard/billing', () => {
     expect(html).not.toContain('javascript:');
     expect(html).toContain('data-action="none"');
     expect(text(html)).toContain("Use the link in Razorpay's email about the failed payment");
+    expect(text(html)).toContain("it can't be cancelled here");
   });
 
   it('paused: Resume; cancelled: Subscribe again', async () => {
     const rig = getRig();
     const accountId = await owned(rig);
     const id = await insertSubscription(getDb(), { accountId, providerId: 'sub_Paused000001', status: 'paused', createdAt: rig.clock.now() });
-    expect(await billingPage()).toContain('data-action="resume"');
+    const paused = await billingPage();
+    expect(paused).toContain('data-action="resume"');
+    expect(text(paused)).toContain("it can't be cancelled here: fix the payment or resume the subscription first.");
     await getDb().query(`update subscriptions set status = 'cancelled' where id = $1`, [id]);
     expect(await billingPage()).toContain('data-action="subscribe"');
   });

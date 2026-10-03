@@ -4,6 +4,7 @@ import 'server-only';
 // the 'use server' module (./settings); the bodies and result codes live in ./controls.
 export {
   DISCONNECT_BILLING_CODES,
+  DISCONNECT_UNINSTALL_CODES,
   runDisconnect,
   runSaveForms,
   runSavePreferences,
