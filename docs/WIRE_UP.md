@@ -273,7 +273,7 @@ There is no account-level "callback URL" in QStash: Autopilot names the destinat
 3. **Add to Vercel** (Production): the four values above. Leave `QSTASH_MAX_DELAY_SECONDS` unset unless step 2 said otherwise.
 4. **Only if you use QStash schedules instead of Vercel Cron** (Hobby, or by choice; D-16, [QS-SCHEDULES-ALTERNATIVE]):
    - Make sure each tick runs once:
-     - **On Hobby**, Vercel may refuse any deployment whose `vercel.json` declares these crons (check #6), and the dashboard setting cannot help because the deployment never gets that far. Change the repository first: replace `vercel.json`'s content with `{}` (delete the `crons` array), `git add vercel.json` (that path only), commit, push, and let Vercel redeploy.
+     - **On Hobby**, Vercel may refuse any deployment whose `vercel.json` declares these crons (check #6), and the dashboard setting cannot help because the deployment never gets that far. Change the repository first: replace `vercel.json`'s content with `{}` (delete the `crons` array), `git add vercel.json` (that path only), commit, push, and let Vercel redeploy. The tests and CI accept a `vercel.json` with no `crons` key (`test/layout/file-layout.test.ts`; an empty or partial list still fails), and `scripts/qstash-schedules.ts` holds the same three schedules.
      - **On Pro, by choice:** either do the same, or turn Vercel's cron jobs off (Settings → Cron Jobs → Disable†).
    - Once the worksheet is complete (step 9.1; the script checks the whole live environment first), preview, then create, the three schedules:
      ```sh

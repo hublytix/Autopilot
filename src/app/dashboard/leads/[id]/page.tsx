@@ -141,7 +141,7 @@ function Drafts({ view }: { view: LeadDetailView }) {
       {view.drafts.map((draft) => (
         <Card key={draft.kind} title={DRAFT_TITLES[draft.kind]}>
           {draft.state === 'expired' ? (
-            <p className={MUTED}>This draft has expired. Drafts are deleted 30 days after the lead arrived.</p>
+            <p className={MUTED}>This draft has expired. Drafts are deleted 30 days after the form was submitted.</p>
           ) : (
             <div className="flex flex-col gap-3">
               {draft.needsTouch ? <Alert tone="warning">This is a starter draft: it needs your touch before you send it.</Alert> : null}
@@ -173,7 +173,7 @@ function Message({ view }: { view: LeadDetailView }) {
       ) : message.reason === 'privacy_deleted' ? (
         <p className={MUTED}>Deleted at the contact&apos;s request.</p>
       ) : (
-        <p className={MUTED}>Removed 30 days after it arrived.</p>
+        <p className={MUTED}>Removed 30 days after the form was submitted.</p>
       )}
     </Card>
   );

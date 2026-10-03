@@ -248,7 +248,8 @@ describe('/dashboard/leads/[id]', () => {
     const visible = text(await leadPage(leadId));
     expect(visible).toContain('Contact #7001 (details removed after 30 days)');
     expect(visible).toContain('This draft has expired.');
-    expect(visible).toContain('Removed 30 days after it arrived.');
+    expect(visible).toContain('Removed 30 days after the form was submitted.');
+    expect(visible).toContain('Drafts are deleted 30 days after the form was submitted.');
   });
 
   it('says HubSpot\'s logged emails could not be checked when the refresh could not read them all', async () => {
