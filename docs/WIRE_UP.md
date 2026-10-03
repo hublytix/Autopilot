@@ -710,6 +710,8 @@ Some checks need a HubSpot access token or refresh token in your hands, which Au
 
 Read by `env.ts` but never set by you: `VERCEL_ENV` (Vercel sets it). Refused in live mode, so never set: `QSTASH_DEV`, `QSTASH_REGION` and region-prefixed QStash variables, `SENTRY_TRACES_SAMPLE_RATE`, `SENTRY_SPOTLIGHT`, `SENTRY_DEBUG`, `ANTHROPIC_CUSTOM_HEADERS`.
 
+Scripts only (the app never reads it), never set on Vercel: `SIMULATE_SYSTEM_TIME`, the system time of `npm run simulate`'s repeat run (a year or an ISO instant, default `2030`).
+
 ---
 
 ## Appendix C. Staging (optional)
